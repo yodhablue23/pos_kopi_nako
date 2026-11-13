@@ -1,0 +1,8 @@
+# Dependensi Aplikasi POS Kopi Nako
+
+# 1. Pustaka GUI Kivy (Wajib untuk antarmuka visual desktop)
+kivy>=2.3.0
+
+# 2. Driver MySQL (Opsional, hanya jika menggunakan DB_ENGINE = "mysql" di db_config.py)
+# Jika menggunakan SQLite bawaan (default), pustaka di bawah ini tidak diperlukan.
+# mysql-connector-python>=8.0.0
