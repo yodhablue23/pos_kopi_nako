@@ -327,25 +327,34 @@ class Database:
             )
             cur.execute(clamp_sql, (MAX_PRODUCT_STOCK, MAX_PRODUCT_STOCK))
 
-            # Buat akun admin awal jika tabel akun masih kosong
-            cur.execute("SELECT COUNT(*) FROM akun")
-            account_count = cur.fetchone()[0]
-            if account_count == 0:
-                salt = secrets.token_hex(16)
-                iterations = 200000
-                digest = hashlib.pbkdf2_hmac(
-                    "sha256", "KopiNako123!".encode("utf-8"),
-                    salt.encode("utf-8"), iterations
-                ).hex()
-                password_hash = f"pbkdf2_sha256${iterations}${salt}${digest}"
-
-                insert_acc_sql = self._prepare_sql(
-                    "INSERT INTO akun (username, nama, role, password_hash) VALUES (%s, %s, %s, %s)"
-                )
-                cur.execute(
-                    insert_acc_sql,
-                    ("admin", "Administrator", "admin", password_hash)
-                )
+            # Pastikan 3 akun awal (admin, kasir, pelanggan) tersedia tanpa duplikat
+            seed_accounts = [
+                ("admin", "KopiNako123!", "Administrator", "admin"),
+                ("kasir", "KasirNako123!", "Kasir Utama", "kasir"),
+                ("pelanggan", "Pelanggan123!", "Pelanggan Mandiri", "pelanggan"),
+            ]
+            check_acc_sql = self._prepare_sql(
+                "SELECT 1 FROM akun WHERE username = %s LIMIT 1"
+            )
+            insert_acc_sql = self._prepare_sql(
+                "INSERT INTO akun (username, nama, role, password_hash) VALUES (%s, %s, %s, %s)"
+            )
+            iterations = 200000
+            for username, raw_password, full_name, role in seed_accounts:
+                cur.execute(check_acc_sql, (username,))
+                if cur.fetchone() is None:
+                    salt = secrets.token_hex(16)
+                    digest = hashlib.pbkdf2_hmac(
+                        "sha256",
+                        raw_password.encode("utf-8"),
+                        salt.encode("utf-8"),
+                        iterations,
+                    ).hex()
+                    password_hash = f"pbkdf2_sha256${iterations}${salt}${digest}"
+                    cur.execute(
+                        insert_acc_sql,
+                        (username, full_name, role, password_hash),
+                    )
 
             conn.commit()
             cur.close()
@@ -723,12 +732,33 @@ class Database:
             conn.close()
 
     def delete_order(self, transaction_id):
-        """Menghapus data transaksi dan rincian itemnya secara permanen."""
+        """Menghapus data transaksi, rincian itemnya, dan mengembalikan stok produk secara atomik."""
         conn = self.connect()
         try:
             if self.engine == "mysql":
                 conn.start_transaction()
-            cur = conn.cursor()
+                cur = conn.cursor(dictionary=True)
+            else:
+                cur = conn.cursor()
+
+            sql_select_items = self._prepare_sql(
+                "SELECT produk_id, jumlah FROM detail_transaksi WHERE transaksi_id = %s"
+            )
+            cur.execute(sql_select_items, (transaction_id,))
+            items = cur.fetchall()
+
+            sql_restore_stock = self._prepare_sql(
+                "UPDATE produk "
+                "SET stok = CASE WHEN stok + %s > %s THEN %s ELSE stok + %s END "
+                "WHERE id = %s"
+            )
+            for item in items:
+                qty = int(item["jumlah"])
+                produk_id = int(item["produk_id"])
+                cur.execute(
+                    sql_restore_stock,
+                    (qty, MAX_PRODUCT_STOCK, MAX_PRODUCT_STOCK, qty, produk_id),
+                )
 
             sql_del_detail = self._prepare_sql(
                 "DELETE FROM detail_transaksi WHERE transaksi_id = %s"

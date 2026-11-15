@@ -111,12 +111,12 @@ class LoginPage(Page):
         # ketika aplikasi dijalankan di desktop. Page tetap dapat di-scroll.
         outer = AnchorLayout(
             anchor_x="center", anchor_y="top",
-            size_hint=(1, None), height=dp(850),
+            size_hint=(1, None), height=dp(900),
             padding=[dp(0), dp(0), dp(0), dp(0)],
         )
         shell = Card(
             orientation="vertical", size_hint=(None, None),
-            width=dp(412), height=dp(820), padding=dp(0), spacing=dp(0),
+            width=dp(412), height=dp(872), padding=dp(0), spacing=dp(0),
             color=cream, radius=0,
         )
 
@@ -161,10 +161,10 @@ class LoginPage(Page):
         # Slot form memenuhi tinggi body desain. Isi form sendiri dipasang di
         # bagian atas supaya tidak muncul ruang kosong besar sebelum judul.
         form_slot = AnchorLayout(
-            anchor_x="center", anchor_y="top", size_hint=(1, None), height=dp(615)
+            anchor_x="center", anchor_y="top", size_hint=(1, None), height=dp(667)
         )
         form = BoxLayout(
-            orientation="vertical", size_hint=(1, None), height=dp(514),
+            orientation="vertical", size_hint=(1, None), height=dp(566),
             padding=[dp(28), dp(24), dp(28), dp(18)], spacing=dp(0),
         )
         form.canvas.before.clear()
@@ -294,14 +294,34 @@ class LoginPage(Page):
         form.add_widget(divider_row)
         form.add_widget(BoxLayout(size_hint_y=None, height=dp(10)))
 
-        demo_btn = button(
-            "Gunakan akun demo (admin/KopiNako123!)",
-            self.fill_demo_credentials, False, 48,
-            outline=True, outline_color=border,
+        demo_row = GridLayout(
+            cols=2, size_hint_y=None, height=dp(44), spacing=dp(8)
         )
-        demo_btn.font_size = dp(12)
-        demo_btn.color = TEXT
-        form.add_widget(demo_btn)
+        demo_admin_btn = button(
+            "Demo Admin",
+            lambda: self.fill_demo_credentials("admin", "KopiNako123!"),
+            False, 44, outline=True, outline_color=border,
+        )
+        demo_admin_btn.font_size = dp(12)
+        demo_admin_btn.color = TEXT
+        demo_kasir_btn = button(
+            "Demo Kasir",
+            lambda: self.fill_demo_credentials("kasir", "KasirNako123!"),
+            False, 44, outline=True, outline_color=border,
+        )
+        demo_kasir_btn.font_size = dp(12)
+        demo_kasir_btn.color = TEXT
+        demo_row.add_widget(demo_admin_btn)
+        demo_row.add_widget(demo_kasir_btn)
+        form.add_widget(demo_row)
+        form.add_widget(BoxLayout(size_hint_y=None, height=dp(8)))
+
+        self_order_btn = button(
+            "PESAN MANDIRI (MODE PELANGGAN)",
+            lambda: self.manager.app.login_as_customer(),
+            True, 48,
+        )
+        form.add_widget(self_order_btn)
 
         form.add_widget(BoxLayout(size_hint_y=None, height=dp(20)))
         form.add_widget(Text(
@@ -319,12 +339,12 @@ class LoginPage(Page):
         outer.add_widget(shell)
         self.content.add_widget(outer)
 
-    def fill_demo_credentials(self):
+    def fill_demo_credentials(self, username="admin", password="KopiNako123!"):
         """Mengisi formulir login dengan kredensial demo secara instan."""
         if hasattr(self, "username_input") and self.username_input is not None:
-            self.username_input.text = "admin"
+            self.username_input.text = username
         if hasattr(self, "password_input") and self.password_input is not None:
-            self.password_input.text = "KopiNako123!"
+            self.password_input.text = password
 
     def submit(self):
         """Mengirimkan kredensial login ke pengendali aplikasi."""
@@ -366,8 +386,14 @@ class Home(Page):
             ))
 
         info_box = BoxLayout(orientation="vertical", spacing=dp(2))
+        if role_kasir == "admin":
+            greeting_text = f"Panel Administrator: {nama_kasir}"
+        elif role_kasir == "kasir":
+            greeting_text = f"Terminal Kasir: {nama_kasir}"
+        else:
+            greeting_text = f"Halo, {nama_kasir}!"
         info_box.add_widget(Text(
-            f"Halo, {nama_kasir}!", size=18, bold=True, color=ON_ACCENT
+            greeting_text, size=18, bold=True, color=ON_ACCENT
         ))
         info_box.add_widget(Text(
             f"Peran: {role_kasir.capitalize()}  •  Database: {engine_name}",
@@ -415,14 +441,23 @@ class Home(Page):
 
         sales_growth, sales_growth_color = growth_display(metrics["sales"])
         transaction_growth, transaction_growth_color = growth_display(metrics["transactions"])
-        metric_cards = [
-            metric_card(
+        if role_kasir == "kasir":
+            first_metric_card = metric_card(
+                "ITEM DI KERANJANG", f"{sum(app.cart.values())} Item",
+                "Pesanan aktif di keranjang", ACCENT, "CART",
+                color=SURFACE, border_color=BORDER_STRONG,
+                height=95, compact=True,
+            )
+        else:
+            first_metric_card = metric_card(
                 "OMZET PENJUALAN", rp(metrics["sales"]["value"]),
                 "Total omzet transaksi hari ini", ACCENT, "Rp",
                 growth_text=sales_growth, growth_color=sales_growth_color,
                 color=SURFACE, border_color=BORDER_STRONG,
                 height=95, compact=True,
-            ),
+            )
+        metric_cards = [
+            first_metric_card,
             metric_card(
                 "JUMLAH TRANSAKSI", f"{metrics['transactions']['value']} Nota",
                 "Pesanan selesai diproses", ACCENT_DARK, "TRX",
@@ -457,10 +492,16 @@ class Home(Page):
             size_hint_y=None, height=dp(26)
         ))
         actions = GridLayout(cols=2, spacing=dp(10), size_hint_y=None, height=dp(102))
-        actions.add_widget(button("BUKA MENU PRODUK", lambda: app.go("products"), True, 46))
-        actions.add_widget(button("LIHAT KERANJANG", lambda: app.go("cart"), False, 46))
-        actions.add_widget(button("RIWAYAT TRANSAKSI", lambda: app.go("reports"), False, 46))
-        actions.add_widget(button("TRANSAKSI BARU", app.new_order, True, 46))
+        if role_kasir == "admin":
+            actions.add_widget(button("BUKA MENU PRODUK", lambda: app.go("products"), True, 46))
+            actions.add_widget(button("KELOLA KATALOG", lambda: app.go("products"), False, 46))
+            actions.add_widget(button("RIWAYAT TRANSAKSI", lambda: app.go("reports"), False, 46))
+            actions.add_widget(button("AUDIT LAPORAN", lambda: app.go("reports"), True, 46))
+        else:
+            actions.add_widget(button("BUKA MENU PRODUK", lambda: app.go("products"), True, 46))
+            actions.add_widget(button("LIHAT KERANJANG", lambda: app.go("cart"), False, 46))
+            actions.add_widget(button("RIWAYAT TRANSAKSI", lambda: app.go("reports"), False, 46))
+            actions.add_widget(button("TRANSAKSI BARU", app.new_order, True, 46))
         quick_actions.add_widget(actions)
         quick_actions.add_widget(button(
             "PENGATURAN TAMPILAN", self.open_theme_settings, False, 44
@@ -513,7 +554,7 @@ class Home(Page):
         content.add_widget(Text(
             "Pilih mode tampilan dan satu aksen warna untuk seluruh aplikasi.",
             size=12, color=MUTED, align="center",
-            size_hint_y=None, height=dp(5)
+            size_hint_y=None, height=dp(22)
         ))
         content.add_widget(Text(
             "Mode Tampilan", size=11, bold=True, color=popup_label_color,
@@ -561,6 +602,11 @@ class Home(Page):
                 active = selected["mode"] == mode
                 mode_button._bg_color.rgba = ACCENT if active else SURFACE
                 mode_button.color = ON_ACCENT if active else TEXT
+            for accent_name, accent_button in accent_buttons.items():
+                label = ACCENT_LABELS[accent_name]
+                accent_button.text = (
+                    f"✓ {label}" if selected["accent"] == accent_name else label
+                )
             selection_label.text = (
                 f"Pilihan: {selected['mode'].upper()} + "
                 f"{ACCENT_LABELS[selected['accent']]}"
@@ -600,29 +646,38 @@ class ProductsPage(Page):
     def render(self):
         self.content.clear_widgets()
         app = self.manager.app
+        perms = app.role_permissions()
+        role = app.user_role()
 
         # Header Halaman
-        self.heading("Katalog Menu", "Pilih menu kopi atau makanan untuk pesanan kasir")
-
-        add_product_button = button(
-            "+ TAMBAH PRODUK BARU", self.open_add_product, True, 46
+        subtitle = (
+            "Pilih menu favorit Anda dan lanjutkan ke Keranjang"
+            if role == "pelanggan"
+            else "Pilih menu kopi atau makanan untuk pesanan kasir"
         )
-        self.content.add_widget(add_product_button)
+        self.heading("Katalog Menu", subtitle)
 
-        stock_action = Card(
-            orientation="horizontal", size_hint_y=None, height=dp(58),
-            padding=[dp(14), dp(8), dp(14), dp(8)], spacing=dp(12),
-            color=CREAM, radius=12
-        )
-        stock_action.add_widget(Text(
-            "Stok kosong atau menipis? Tambahkan stok dari panel kasir.",
-            size=11, color=COFFEE
-        ))
-        stock_button = button("MANAJEMEN STOK", self.open_stock_management, True, 44)
-        stock_button.size_hint_x = None
-        stock_button.width = dp(180)
-        stock_action.add_widget(stock_button)
-        self.content.add_widget(stock_action)
+        if perms["can_manage_products"]:
+            add_product_button = button(
+                "+ TAMBAH PRODUK BARU", self.open_add_product, True, 46
+            )
+            self.content.add_widget(add_product_button)
+
+        if perms["can_manage_stock"]:
+            stock_action = Card(
+                orientation="horizontal", size_hint_y=None, height=dp(58),
+                padding=[dp(14), dp(8), dp(14), dp(8)], spacing=dp(12),
+                color=CREAM, radius=12
+            )
+            stock_action.add_widget(Text(
+                "Stok kosong atau menipis? Tambahkan stok dari panel kasir.",
+                size=11, color=COFFEE
+            ))
+            stock_button = button("MANAJEMEN STOK", self.open_stock_management, True, 44)
+            stock_button.size_hint_x = None
+            stock_button.width = dp(180)
+            stock_action.add_widget(stock_button)
+            self.content.add_widget(stock_action)
 
         # Kotak Pencarian Modern Dibatasi 48% Lebar Halaman
         search_wrap = BoxLayout(orientation="horizontal", size_hint=(1, None), height=dp(46))
@@ -1070,6 +1125,8 @@ class ProductsPage(Page):
             return
         self.grid.clear_widgets()
         app = self.manager.app
+        perms = app.role_permissions()
+        role = app.user_role()
 
         matched_products = []
         for product in app.products:
@@ -1151,18 +1208,29 @@ class ProductsPage(Page):
             ))
 
             # Badge Status Stok Dinamis
-            if is_out_of_stock:
-                stock_text = "STOK HABIS"
-                stock_color = DANGER_TEXT
-            elif stok < 15:
-                stock_text = f"Sisa Sedikit: {stok} item"
-                stock_color = WARNING_TEXT
+            if role == "pelanggan":
+                if is_out_of_stock:
+                    stock_text = "Stok Habis"
+                    stock_color = DANGER_TEXT
+                    stock_bold = True
+                else:
+                    stock_text = "Tersedia"
+                    stock_color = MUTED
+                    stock_bold = False
             else:
-                stock_text = f"Tersedia: {stok} item"
-                stock_color = MUTED
+                if is_out_of_stock:
+                    stock_text = "STOK HABIS"
+                    stock_color = DANGER_TEXT
+                elif stok < 15:
+                    stock_text = f"Sisa Sedikit: {stok} item"
+                    stock_color = WARNING_TEXT
+                else:
+                    stock_text = f"Tersedia: {stok} item"
+                    stock_color = MUTED
+                stock_bold = stok < 15
 
             details.add_widget(Text(
-                stock_text, size=11, bold=(stok < 15), color=stock_color,
+                stock_text, size=11, bold=stock_bold, color=stock_color,
                 size_hint_y=None, height=dp(16)
             ))
 
@@ -1175,11 +1243,18 @@ class ProductsPage(Page):
             # Spacer fleksibel untuk menjamin baris tombol aksi selalu sejajar di dasar kartu
             details.add_widget(BoxLayout())
 
-            # Baris Aksi Kasir: Counter ringkas [-] [qty] [+] atau tombol "TAMBAH +"
+            # Baris Aksi: berbeda antara Admin (tambah stok) vs Kasir/Pelanggan (keranjang)
             action_row = BoxLayout(orientation="horizontal", spacing=dp(6), size_hint_y=None, height=dp(44))
-            if is_out_of_stock:
+            if role == "admin":
+                btn_quick_stock = button(
+                    "+ STOK (10)",
+                    lambda p_id=pid: self.quick_add_stock(p_id, 10),
+                    True, 44
+                )
+                action_row.add_widget(btn_quick_stock)
+            elif is_out_of_stock:
                 action_row.add_widget(Text(
-                    "Stok habis. Gunakan Manajemen Stok.",
+                    "Stok habis." if role == "pelanggan" else "Stok habis. Gunakan Manajemen Stok.",
                     size=10, bold=True, color=DANGER_TEXT
                 ))
             elif qty_in_cart > 0:
@@ -1211,8 +1286,9 @@ class ProductsPage(Page):
 
                 action_row.add_widget(Text("di keranjang", size=10, color=MUTED, align="left"))
             else:
+                add_label_text = "PESAN +" if role == "pelanggan" else "TAMBAH +"
                 btn_add = button(
-                    "TAMBAH +",
+                    add_label_text,
                     lambda p=product: self.add_and_refresh(p),
                     True, 44
                 )
@@ -1221,12 +1297,13 @@ class ProductsPage(Page):
             details.add_widget(action_row)
 
             # Tombol hapus dipisahkan dari aksi keranjang agar tidak mudah tersentuh.
-            delete_button = button(
-                "HAPUS PRODUK",
-                lambda p=product: self.confirm_delete_product(p),
-                False, 32, outline=True, outline_color=DANGER_TEXT
-            )
-            details.add_widget(delete_button)
+            if perms["can_manage_products"]:
+                delete_button = button(
+                    "HAPUS PRODUK",
+                    lambda p=product: self.confirm_delete_product(p),
+                    False, 32, outline=True, outline_color=DANGER_TEXT
+                )
+                details.add_widget(delete_button)
             card.add_widget(details)
             self.grid.add_widget(card)
 
@@ -1278,6 +1355,15 @@ class ProductsPage(Page):
         self.manager.app.add_product(product)
         self.render_products()
 
+    def quick_add_stock(self, product_id, quantity=10):
+        """Menambah stok cepat langsung dari kartu produk pada mode Admin."""
+        app = self.manager.app
+        try:
+            app.add_stock(product_id, quantity)
+            self.render_products()
+        except Exception as error:
+            app.notice(str(error))
+
     def minus_and_refresh(self, product):
         """Mengurangi kuantitas produk dari keranjang dan memperbarui indikator kartu secara instan."""
         self.manager.app.change_qty(product["id"], -1)
@@ -1293,6 +1379,8 @@ class CartPage(Page):
     def render(self):
         self.content.clear_widgets()
         app = self.manager.app
+        perms = app.role_permissions()
+        role = app.user_role()
         self.heading("Keranjang", "Periksa pesanan sebelum pembayaran")
 
         if not app.cart:
@@ -1318,7 +1406,12 @@ class CartPage(Page):
         left_box.add_widget(Text("DATA TRANSAKSI", size=10, bold=True, color=MUTED, size_hint_y=None, height=dp(16)))
         today_str = datetime.now().strftime("%d %b %Y, %H:%M WIB")
         left_box.add_widget(Text(f"Waktu: {today_str}", size=12, bold=True, color=COFFEE, size_hint_y=None, height=dp(20)))
-        left_box.add_widget(Text("Nama Pelanggan / No. Meja:", size=11, bold=True, color=BROWN, size_hint_y=None, height=dp(18)))
+        customer_label_text = (
+            "Nama Anda / Nomor Meja (Wajib Diisi):"
+            if perms["require_customer_label"]
+            else "Nama Pelanggan / No. Meja:"
+        )
+        left_box.add_widget(Text(customer_label_text, size=11, bold=True, color=BROWN, size_hint_y=None, height=dp(18)))
         customer_input = text_input(
             text=getattr(app, "customer_name", ""),
             hint_text=(
@@ -1416,8 +1509,13 @@ class CartPage(Page):
 
             self.content.add_widget(row)
 
-        # 3. Tombol Aksi Kasir
-        self.content.add_widget(button("LANJUT PEMBAYARAN", app.checkout, True, 48))
+        # 3. Tombol Aksi Kasir / Pelanggan
+        checkout_label = (
+            "BUAT PESANAN & BAYAR"
+            if perms["require_customer_label"]
+            else "LANJUT PEMBAYARAN"
+        )
+        self.content.add_widget(button(checkout_label, app.checkout, True, 48))
         self.content.add_widget(button(
             "KOSONGKAN KERANJANG", app.clear_cart, False, 44, outline=True, outline_color=CORAL
         ))
@@ -1432,6 +1530,7 @@ class ReportsPage(Page):
     def render(self):
         self.content.clear_widgets()
         app = self.manager.app
+        perms = app.role_permissions()
 
         period_labels = dict(REPORT_PERIODS)
         active_period = app.report_period
@@ -1571,9 +1670,10 @@ class ReportsPage(Page):
                 "LIHAT STRUK",
                 lambda o=order: app.show_saved_receipt(o), False, 44
             ))
-            actions.add_widget(button(
-                "HAPUS",
-                lambda o=order: app.confirm_delete_order(o), False, 44,
-                outline=True, outline_color=CORAL
-            ))
+            if perms["can_delete_orders"]:
+                actions.add_widget(button(
+                    "HAPUS",
+                    lambda o=order: app.confirm_delete_order(o), False, 44,
+                    outline=True, outline_color=CORAL
+                ))
             self.content.add_widget(actions)

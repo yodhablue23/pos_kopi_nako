@@ -46,6 +46,9 @@ from database import (
     Database, MAX_CUSTOMER_LABEL_LENGTH, MAX_PRODUCT_STOCK,
     normalize_customer_label, normalize_product_name,
 )
+import role_admin
+import role_kasir
+import role_pelanggan
 from screens import LoginPage, Home, ProductsPage, CartPage, ReportsPage
 from ui_components import (
     PAYMENT_BLUE, PAYMENT_ERROR, PAYMENT_FIELD, PAYMENT_MUTED, PAYMENT_TEXT,
@@ -215,8 +218,39 @@ class POSApp(App):
     # -------------------------------------------------------------------------
     # Autentikasi Pengguna & Navigasi
     # -------------------------------------------------------------------------
+    def user_role(self):
+        """Mengembalikan role pengguna aktif ('admin', 'kasir', 'pelanggan'), atau None jika belum login."""
+        if not self.current_user:
+            return None
+        return self.current_user.get("role", "kasir")
+
+    def role_permissions(self):
+        """Mengembalikan dictionary izin aktif sesuai role pengguna yang sedang login."""
+        role = self.user_role()
+        role_map = {
+            role_admin.ROLE_NAME: role_admin,
+            role_kasir.ROLE_NAME: role_kasir,
+            role_pelanggan.ROLE_NAME: role_pelanggan,
+        }
+        mod = role_map.get(role)
+        if mod is None:
+            return {
+                "can_manage_products": False,
+                "can_manage_stock": False,
+                "can_delete_orders": False,
+                "require_customer_label": False,
+                "allowed_screens": (),
+            }
+        return {
+            "can_manage_products": mod.CAN_MANAGE_PRODUCTS,
+            "can_manage_stock": mod.CAN_MANAGE_STOCK,
+            "can_delete_orders": mod.CAN_DELETE_ORDERS,
+            "require_customer_label": mod.REQUIRE_CUSTOMER_LABEL,
+            "allowed_screens": mod.ALLOWED_SCREENS,
+        }
+
     def login(self, username, password):
-        """Memproses login kasir dengan verifikasi username dan password."""
+        """Memproses login pengguna dengan verifikasi username dan password."""
         if self.db_error:
             self.notice(
                 f"Database ({self.db.engine}) belum tersambung:\n{self.db_error}"
@@ -239,17 +273,42 @@ class POSApp(App):
         # Login berhasil
         self.current_user = user
         self.cart.clear()
+        self.customer_name = ""
         if self.nav_wrapper not in self.root_layout.children:
             self.root_layout.add_widget(self.nav_wrapper)
         self.nav_wrapper.opacity = 1
         self.nav_wrapper.disabled = False
         self.nav_wrapper.height = dp(62)
         self.nav.height = dp(46)
-        self.sm.current = "home"
+        target_screen = "products" if self.user_role() == "pelanggan" else "home"
+        self.sm.current = target_screen
         self.refresh_data()
         self.refresh_report()
         self.update_nav()
-        self.sm.get_screen("home").render()
+        self.sm.get_screen(target_screen).render()
+
+    def login_as_customer(self):
+        """Jalan pintas Self-Order Pelanggan tanpa mengetik password."""
+        if self.db_error:
+            self.notice(
+                f"Database ({self.db.engine}) belum tersambung:\n{self.db_error}"
+            )
+            return
+
+        self.current_user = role_pelanggan.build_customer_session()
+        self.cart.clear()
+        self.customer_name = ""
+        if self.nav_wrapper not in self.root_layout.children:
+            self.root_layout.add_widget(self.nav_wrapper)
+        self.nav_wrapper.opacity = 1
+        self.nav_wrapper.disabled = False
+        self.nav_wrapper.height = dp(62)
+        self.nav.height = dp(46)
+        self.sm.current = "products"
+        self.refresh_data()
+        self.refresh_report()
+        self.update_nav()
+        self.sm.get_screen("products").render()
 
     def logout(self):
         """Mengakhiri sesi kasir dan mengembalikan layar ke halaman login."""
@@ -257,6 +316,7 @@ class POSApp(App):
             return
         self.current_user = None
         self.cart.clear()
+        self.customer_name = ""
         if self.nav_wrapper in self.root_layout.children:
             self.root_layout.remove_widget(self.nav_wrapper)
         self.nav_wrapper.opacity = 0
@@ -267,7 +327,7 @@ class POSApp(App):
         self.notice("Anda telah berhasil logout.")
 
     def go(self, name):
-        """Berpindah ke halaman lain dengan validasi login."""
+        """Berpindah ke halaman lain dengan validasi login dan hak akses role."""
         if self.current_user is None:
             if hasattr(self, "root_layout") and self.nav_wrapper in self.root_layout.children:
                 self.root_layout.remove_widget(self.nav_wrapper)
@@ -278,12 +338,42 @@ class POSApp(App):
         if self.db_error:
             self.notice("Database belum tersambung. Periksa konfigurasi db_config.py.")
             return
+        if self.user_role() == "pelanggan" and name in ("home", "reports"):
+            self.notice("Halaman ini hanya untuk Kasir dan Admin.")
+            return
+        allowed_screens = self.role_permissions().get("allowed_screens", ())
+        if allowed_screens and name not in allowed_screens:
+            self.notice("Halaman ini tidak tersedia untuk peran Anda.")
+            return
         self.sm.current = name
         self.update_nav()
         self.sm.get_screen(name).render()
 
     def update_nav(self):
-        """Memperbarui visual navigasi bawah: Active State kontras/solid, tombol lain redup/soft."""
+        """Memperbarui visual navigasi bawah secara dinamis sesuai ALLOWED_SCREENS role aktif."""
+        allowed = self.role_permissions().get(
+            "allowed_screens", ("home", "products", "cart", "reports")
+        )
+        if not allowed:
+            allowed = ("home", "products", "cart", "reports")
+
+        if hasattr(self, "nav"):
+            self.nav.clear_widgets()
+            visible_screens = [
+                screen for screen in ("home", "products", "cart", "reports")
+                if screen in allowed and screen in self.nav_buttons
+            ]
+            self.nav.cols = len(visible_screens) + (1 if hasattr(self, "logout_button") else 0)
+            for screen in visible_screens:
+                btn = self.nav_buttons[screen]
+                btn.disabled = False
+                btn.opacity = 1
+                self.nav.add_widget(btn)
+            if hasattr(self, "logout_button"):
+                self.logout_button.disabled = False
+                self.logout_button.opacity = 1
+                self.nav.add_widget(self.logout_button)
+
         for name, btn in self.nav_buttons.items():
             active = self.sm.current == name
             if active:
@@ -412,108 +502,18 @@ class POSApp(App):
             pass
 
     def create_product(self, raw_name, category, raw_price, raw_stock, image_path=None):
-        """Menambahkan produk baru beserta foto ke database."""
-        if self.current_user is None:
-            raise ValueError("Anda harus login untuk menambahkan produk.")
-        if self.db_error:
-            raise ValueError("Database belum tersambung.")
-        name = normalize_product_name(raw_name)
-        if raw_price is None or not str(raw_price).strip():
-            raise ValueError("Harga produk wajib diisi.")
-        if raw_stock is None or not str(raw_stock).strip():
-            raise ValueError("Stok awal wajib diisi.")
-
-        try:
-            price_text = str(raw_price).strip().replace(",", "")
-            price = float(price_text)
-            stock = int(str(raw_stock).strip())
-        except (TypeError, ValueError):
-            raise ValueError("Harga harus angka dan stok harus bilangan bulat.")
-        if price <= 0:
-            raise ValueError("Harga harus lebih dari 0.")
-        if price > 100000:
-            raise ValueError("Harga produk maksimal Rp 100.000.")
-        if stock < 0:
-            raise ValueError("Stok tidak boleh negatif.")
-        if stock > MAX_PRODUCT_STOCK:
-            raise ValueError(f"Stok awal maksimal {MAX_PRODUCT_STOCK} item.")
-
-        final_image_path = None
-        saved_image = None
-        if image_path:
-            source = Path(image_path)
-            if not source.is_file():
-                raise ValueError("File foto produk tidak ditemukan.")
-            extension = source.suffix.lower()
-            if extension not in (".jpg", ".jpeg", ".png", ".webp"):
-                raise ValueError("Format foto harus JPG, JPEG, PNG, atau WEBP.")
-            image_dir = Path(self.user_data_dir) / "product_images"
-            image_dir.mkdir(parents=True, exist_ok=True)
-            saved_image = image_dir / f"product_{uuid.uuid4().hex}{extension}"
-            shutil.copy2(source, saved_image)
-            final_image_path = str(saved_image)
-
-        try:
-            product = self.db.create_product(
-                name, category, price, stock, image_path=final_image_path
-            )
-        except Exception:
-            if saved_image is not None:
-                try:
-                    saved_image.unlink(missing_ok=True)
-                except OSError:
-                    pass
-            raise
-
-        self.discard_product_image(image_path)
-        product["image_path"] = final_image_path
-        self.refresh_data()
-        return product
+        """Menambahkan produk baru beserta foto ke database (khusus Admin)."""
+        return role_admin.admin_create_product(
+            self, raw_name, category, raw_price, raw_stock, image_path=image_path
+        )
 
     def delete_product(self, product_id):
-        """Mengarsipkan produk dari katalog tanpa merusak riwayat transaksi."""
-        if self.current_user is None:
-            raise ValueError("Anda harus login untuk menghapus produk.")
-        if self.db_error:
-            raise ValueError("Database belum tersambung.")
-
-        try:
-            product_id = int(product_id)
-        except (TypeError, ValueError):
-            raise ValueError("Produk yang dipilih tidak valid.")
-
-        product = self.products_by_id.get(product_id)
-        if product is None:
-            raise ValueError("Produk tidak ditemukan atau sudah dihapus.")
-
-        # Hapus juga dari keranjang aktif agar produk yang diarsipkan tidak ikut checkout.
-        self.db.delete_product(product_id)
-        self.cart.pop(product_id, None)
-        self.refresh_data()
-
-        if hasattr(self, "sm") and self.sm.current == "cart":
-            self.sm.get_screen("cart").render()
-        return product
+        """Mengarsipkan produk dari katalog tanpa merusak riwayat transaksi (khusus Admin)."""
+        return role_admin.admin_delete_product(self, product_id)
 
     def add_stock(self, product_id, raw_quantity):
         """Menambahkan stok dari alur manajemen stok kasir/admin."""
-        if self.current_user is None:
-            raise ValueError("Anda harus login sebagai kasir untuk mengubah stok.")
-        if self.db_error:
-            raise ValueError("Database belum tersambung.")
-        if raw_quantity is None or not str(raw_quantity).strip():
-            raise ValueError("Jumlah stok masuk wajib diisi.")
-
-        try:
-            quantity = int(str(raw_quantity).strip())
-        except (TypeError, ValueError):
-            raise ValueError("Jumlah stok harus berupa bilangan bulat.")
-        if quantity <= 0:
-            raise ValueError("Jumlah stok masuk harus lebih dari 0.")
-
-        updated_product = self.db.increase_stock(product_id, quantity)
-        self.refresh_data()
-        return updated_product
+        return role_kasir.kasir_add_stock(self, product_id, raw_quantity)
 
     def _report_range(self, period=None, reference=None):
         """Menghasilkan rentang waktu lokal untuk laporan kalender."""
@@ -696,7 +696,12 @@ class POSApp(App):
             self.notice("Keranjang belanja masih kosong!")
             return
         try:
-            self.customer_name = normalize_customer_label(self.customer_name)
+            if self.user_role() == "pelanggan":
+                self.customer_name = role_pelanggan.validate_customer_checkout(
+                    self.customer_name
+                )
+            else:
+                self.customer_name = normalize_customer_label(self.customer_name)
         except ValueError as error:
             self.notice(str(error))
             return
@@ -722,12 +727,18 @@ class POSApp(App):
         )
         _style_popup_text_white(popup, content)
 
-        # Opsi Tunai membuka form input penerimaan uang
-        content.add_widget(button(
-            "Tunai (Uang Cash)",
-            lambda: self.open_cash_tender_popup(popup, total),
-            True, 42
-        ))
+        if self.user_role() == "pelanggan":
+            content.add_widget(button(
+                "Bayar Tunai di Kasir",
+                lambda: role_pelanggan.pelanggan_pay_at_cashier(self, popup, total),
+                True, 42
+            ))
+        else:
+            content.add_widget(button(
+                "Tunai (Uang Cash)",
+                lambda: self.open_cash_tender_popup(popup, total),
+                True, 42
+            ))
         content.add_widget(button(
             "Saldo E-Wallet (Barcode)",
             lambda: self.open_ewallet_barcode_popup(popup, total),
@@ -743,103 +754,9 @@ class POSApp(App):
 
     def open_cash_tender_popup(self, parent_popup, total):
         """Membuka jendela form penerimaan uang tunai dan hitung kembalian otomatis."""
-        parent_popup.dismiss()
-
-        content = BoxLayout(orientation="vertical", padding=dp(16), spacing=dp(10))
-        content.add_widget(Text(
-            f"Total Tagihan: {rp(total)}",
-            size=19, bold=True, color=(1, 1, 1, 1), size_hint_y=None, height=dp(6),
-            align="center"
-        ))
-
-        content.add_widget(Text(
-            "Uang Tunai Diterima (Rp):",
-            size=12, bold=True, color=MUTED, size_hint_y=None, height=dp(18)
-        ))
-
-        # Input nominal uang tunai
-        cash_input = text_input(
-            text=str(int(total)),
-            height=46, font_size=18, input_filter="int"
+        role_kasir.kasir_open_cash_tender(
+            self, parent_popup, total, style_popup_fn=_style_popup_text_white
         )
-        content.add_widget(cash_input)
-
-        # Tombol jalan pintas pecahan uang
-        quick_grid = GridLayout(cols=4, spacing=dp(6), size_hint_y=None, height=dp(36))
-        quick_values = [
-            ("Uang Pas", int(total)),
-            ("Rp 20.000", 20000),
-            ("Rp 50.000", 50000),
-            ("Rp 100.000", 100000),
-        ]
-        for label, val in quick_values:
-            quick_grid.add_widget(button(
-                label,
-                lambda v=val: setattr(cash_input, "text", str(v)),
-                False, 34
-            ))
-        content.add_widget(quick_grid)
-
-        # Label status kembalian / kekurangan uang
-        change_label = Text(
-            "Kembalian: Rp 0",
-            size=16, bold=True, color=SUCCESS_TEXT, size_hint_y=None, height=dp(30),
-            align="center"
-        )
-        content.add_widget(change_label)
-
-        def update_change(*_):
-            raw_text = cash_input.text.strip()
-            if not raw_text:
-                change_label.text = "Masukkan nominal pembayaran"
-                change_label.color = (1, 1, 1, 1)
-                return
-            try:
-                nominal = int(raw_text)
-                kembalian = nominal - total
-                if kembalian < 0:
-                    change_label.text = f"Uang Kurang: {rp(abs(kembalian))}"
-                    change_label.color = (1, 0.58, 0.58, 1)
-                else:
-                    change_label.text = f"Kembalian: {rp(kembalian)}"
-                    change_label.color = (0.55, 1, 0.72, 1)
-            except ValueError:
-                change_label.text = "Nominal tidak valid"
-                change_label.color = (1, 0.58, 0.58, 1)
-
-        cash_input.bind(text=update_change)
-        update_change()
-
-        tender_popup = themed_popup(
-            "Pembayaran Tunai & Kembalian", content,
-            size_hint=(0.88, None), height=dp(390),
-        )
-        _style_popup_text_white(tender_popup, content)
-
-        def submit_cash():
-            raw_text = cash_input.text.strip()
-            if not raw_text:
-                self.notice("Harap masukkan nominal uang tunai.")
-                return
-            try:
-                nominal = int(raw_text)
-            except ValueError:
-                self.notice("Nominal uang harus berupa angka.")
-                return
-
-            if nominal < total:
-                self.notice(f"Uang tidak mencukupi! Kurang {rp(total - nominal)}.")
-                return
-
-            kembalian = nominal - total
-            self.finish_payment("Tunai", tender_popup, bayar=nominal, kembalian=kembalian)
-
-        actions = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(8))
-        actions.add_widget(button("BATAL", tender_popup.dismiss, False, 40))
-        actions.add_widget(button("SELESAIKAN PEMBAYARAN", submit_cash, True, 40))
-        content.add_widget(actions)
-
-        tender_popup.open()
 
     def open_ewallet_barcode_popup(self, parent_popup, total):
         """Membuka jendela modal QR Code / Barcode pembayaran saldo e-wallet."""
@@ -1183,7 +1100,10 @@ class POSApp(App):
 
         self.cart.clear()
         popup.dismiss()
-        self.go("reports")
+        if self.user_role() == "pelanggan":
+            self.go("products")
+        else:
+            self.go("reports")
         self.show_receipt(receipt)
         self.customer_name = ""
 
@@ -1337,6 +1257,13 @@ class POSApp(App):
     # -------------------------------------------------------------------------
     def confirm_delete_order(self, order):
         """Menampilkan dialog konfirmasi sebelum menghapus riwayat transaksi."""
+        try:
+            role_admin.validate_admin_access(
+                self.user_role(), "menghapus riwayat transaksi"
+            )
+        except ValueError as error:
+            self.notice(str(error))
+            return
         content = BoxLayout(
             orientation="vertical", padding=dp(16), spacing=dp(12)
         )
@@ -1358,18 +1285,9 @@ class POSApp(App):
         content.add_widget(actions)
         popup.open()
 
-    def delete_order(self, order, popup):
-        """Mengeksekusi penghapusan transaksi pada database."""
-        try:
-            transaction_id = int(order["id"].replace("KN-", ""))
-            self.db.delete_order(transaction_id)
-            self.refresh_data()
-            self.refresh_report()
-            popup.dismiss()
-            self.sm.get_screen("reports").render()
-            self.notice("Transaksi berhasil dihapus.")
-        except Exception as error:
-            self.notice("Transaksi gagal dihapus:\n" + str(error))
+    def delete_order(self, order, popup=None):
+        """Mengeksekusi penghapusan transaksi pada database (khusus Admin)."""
+        return role_admin.admin_delete_order(self, order, popup)
 
     def notice(self, message):
         """Menampilkan pesan pop-up informasi/peringatan dengan tema kafe yang rapi."""
