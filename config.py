@@ -124,3 +124,38 @@ SEED_PRODUCTS = [
     {"name": "Roti Bakar", "category": "Makanan", "price": 15000, "stok": 100},
     {"name": "Pisang Goreng", "category": "Makanan", "price": 14000, "stok": 100},
 ]
+
+# -------------------------------------------------------------------------
+# 5. Kode Voucher Promo & Diskon Kafe
+# -------------------------------------------------------------------------
+VOUCHER_CODES = {
+    "HEMAT10": {
+        "type": "percent",
+        "value": 10,
+        "max_discount": 15000,
+        "min_subtotal": 0,
+        "label": "Diskon 10% (Maks. Rp 15.000)",
+    },
+    "NAKO5K": {
+        "type": "fixed",
+        "value": 5000,
+        "max_discount": 5000,
+        "min_subtotal": 25000,
+        "label": "Potongan Rp 5.000 (Min. Rp 25.000)",
+    },
+    "KOPI20": {
+        "type": "percent",
+        "value": 20,
+        "max_discount": 20000,
+        "min_subtotal": 40000,
+        "label": "Diskon 20% (Min. Rp 40.000)",
+    },
+}
+
+BEST_SELLER_PRODUCTS = frozenset({
+    "Es Kopi Nako",
+    "Kopi Susu Gula Aren",
+    "Matcha Latte",
+})
+SUGAR_LEVELS = ("Normal Sugar", "Less Sugar", "No Sugar")
+ICE_LEVELS = ("Normal Ice", "Less Ice", "Hangat / Hot")

@@ -11,7 +11,7 @@ from kivy.uix.label import Label
 from kivy.uix.button import Button
 from kivy.uix.textinput import TextInput
 from kivy.uix.popup import Popup
-from kivy.graphics import Color, RoundedRectangle, Line
+from kivy.graphics import Color, RoundedRectangle, Line, Ellipse
 from kivy.uix.image import Image
 
 from config import LOGO_PATH
@@ -52,13 +52,13 @@ def background(widget, color, radius=16, border_color=None, border_width=1):
     posisi dan ukurannya selalu mengikuti perubahan ukuran jendela.
     """
     with widget.canvas.before:
-        Color(*color)
+        widget._bg_color = Color(*color)
         shape = RoundedRectangle(
             pos=widget.pos, size=widget.size, radius=[dp(radius)]
         )
         outline = None
         if border_color is not None:
-            Color(*border_color)
+            widget._outline_color = Color(*border_color)
             outline = Line(
                 rounded_rectangle=(widget.x, widget.y, widget.width, widget.height, dp(radius)),
                 width=border_width,
@@ -376,6 +376,11 @@ def button(
         padding=[dp(12), dp(8)],
     )
 
+    btn._bg_default = bg_default
+    btn._bg_pressed = bg_pressed
+    btn._text_default = text_default
+    btn._text_pressed = text_pressed
+
     with btn.canvas.before:
         btn._bg_color = Color(*bg_default)
         btn._bg_shape = RoundedRectangle(pos=btn.pos, size=btn.size, radius=[dp(12)])
@@ -398,11 +403,11 @@ def button(
 
     def pressed_state(_instance, state):
         if state == "down":
-            btn._bg_color.rgba = bg_pressed
-            btn.color = text_pressed
+            btn._bg_color.rgba = btn._bg_pressed
+            btn.color = btn._text_pressed
         else:
-            btn._bg_color.rgba = bg_default
-            btn.color = text_default
+            btn._bg_color.rgba = btn._bg_default
+            btn.color = btn._text_default
 
     btn.bind(state=pressed_state)
     btn.bind(on_release=lambda *_: callback() if callback else None)
@@ -492,3 +497,229 @@ class Page(Screen):
         ))
         box.add_widget(titles)
         self.content.add_widget(box)
+
+
+def dashboard_hero_card(
+    title, value, subtitle, bg_color, icon_text="$",
+    progress=None, height=132,
+):
+    """Kartu metrik berwarna solid bergaya dashboard modern (seperti referensi POS)."""
+    card = Card(
+        orientation="vertical",
+        padding=[dp(16), dp(14), dp(16), dp(14)],
+        spacing=dp(4),
+        size_hint_y=None,
+        height=dp(height),
+        color=bg_color,
+        radius=14,
+    )
+    # Dekorasi lingkaran samar di pojok kanan atas kartu
+    with card.canvas.before:
+        Color(1, 1, 1, 0.08)
+        deco_outer = Ellipse(pos=(card.right - dp(44), card.top - dp(44)), size=(dp(56), dp(56)))
+        Color(1, 1, 1, 0.06)
+        deco_inner = Ellipse(pos=(card.right - dp(32), card.top - dp(32)), size=(dp(34), dp(34)))
+
+    def _update_deco(*_):
+        deco_outer.pos = (card.right - dp(44), card.top - dp(44))
+        deco_outer.size = (dp(56), dp(56))
+        deco_inner.pos = (card.right - dp(32), card.top - dp(32))
+        deco_inner.size = (dp(34), dp(34))
+
+    card.bind(pos=_update_deco, size=_update_deco)
+
+    top_row = BoxLayout(
+        orientation="horizontal", size_hint_y=None, height=dp(28), spacing=dp(8)
+    )
+    icon_badge = Card(
+        orientation="vertical",
+        size_hint=(None, None),
+        size=(dp(26), dp(26)),
+        color=(1, 1, 1, 0.18),
+        radius=7,
+    )
+    icon_badge.add_widget(Text(
+        icon_text, size=11, bold=True, color=(1, 1, 1, 1), align="center"
+    ))
+    top_row.add_widget(icon_badge)
+    top_row.add_widget(Text(
+        title, size=11, bold=True, color=(1, 1, 1, 0.92)
+    ))
+    card.add_widget(top_row)
+
+    card.add_widget(Text(
+        value, size=23, bold=True, color=(1, 1, 1, 1),
+        size_hint_y=None, height=dp(36),
+    ))
+
+    if progress is not None:
+        pct = max(0.0, min(1.0, float(progress)))
+        bar_wrap = BoxLayout(size_hint_y=None, height=dp(8))
+        with bar_wrap.canvas:
+            Color(1, 1, 1, 0.22)
+            track_rect = RoundedRectangle(
+                pos=bar_wrap.pos, size=(bar_wrap.width, dp(6)), radius=[dp(3)]
+            )
+            Color(1, 1, 1, 0.95)
+            fill_rect = RoundedRectangle(
+                pos=bar_wrap.pos,
+                size=(max(dp(6), bar_wrap.width * pct), dp(6)),
+                radius=[dp(3)],
+            )
+
+        def _update_bar(*_):
+            track_rect.pos = (bar_wrap.x, bar_wrap.y + dp(1))
+            track_rect.size = (bar_wrap.width, dp(6))
+            fill_rect.pos = (bar_wrap.x, bar_wrap.y + dp(1))
+            fill_rect.size = (
+                max(dp(6), bar_wrap.width * pct) if pct > 0 else 0,
+                dp(6),
+            )
+
+        bar_wrap.bind(pos=_update_bar, size=_update_bar)
+        card.add_widget(bar_wrap)
+    else:
+        card.add_widget(BoxLayout(size_hint_y=None, height=dp(4)))
+
+    card.add_widget(Text(
+        subtitle, size=10, color=(1, 1, 1, 0.85),
+        size_hint_y=None, height=dp(18),
+    ))
+    return card
+
+
+def dashboard_mini_card(title, value, icon_text="▣", border_color=None, height=82):
+    """Kartu ringkasan putih bersih dengan badge ikon lembut di sebelah kanan."""
+    card = Card(
+        orientation="horizontal",
+        padding=[dp(16), dp(12), dp(16), dp(12)],
+        spacing=dp(10),
+        size_hint_y=None,
+        height=dp(height),
+        color=SURFACE,
+        radius=12,
+        border_color=border_color,
+    )
+    left_col = BoxLayout(orientation="vertical", spacing=dp(4))
+    left_col.add_widget(Text(
+        title, size=11, color=MUTED, size_hint_y=None, height=dp(18)
+    ))
+    left_col.add_widget(Text(
+        str(value), size=20, bold=True, color=TEXT, size_hint_y=None, height=dp(28)
+    ))
+    card.add_widget(left_col)
+
+    icon_box_wrap = BoxLayout(
+        orientation="vertical", size_hint=(None, 1), width=dp(40)
+    )
+    icon_box_wrap.add_widget(BoxLayout())
+    icon_box = Card(
+        orientation="vertical",
+        size_hint=(None, None),
+        size=(dp(38), dp(38)),
+        color=(0.45, 0.48, 0.56, 0.12),
+        radius=10,
+    )
+    icon_box.add_widget(Text(
+        icon_text, size=13, bold=True, color=TEXT, align="center"
+    ))
+    icon_box_wrap.add_widget(icon_box)
+    icon_box_wrap.add_widget(BoxLayout())
+    card.add_widget(icon_box_wrap)
+    return card
+
+
+class RevenueTrendChart(BoxLayout):
+    """Widget grafik garis Tren Pendapatan dengan grid horizontal dan label sumbu."""
+
+    def __init__(self, series, **kwargs):
+        kwargs.setdefault("orientation", "vertical")
+        kwargs.setdefault("size_hint_y", None)
+        kwargs.setdefault("height", dp(215))
+        super().__init__(**kwargs)
+        self.series = list(series or [])
+
+        body = BoxLayout(orientation="horizontal", size_hint=(1, 1), spacing=dp(8))
+        self.y_axis = BoxLayout(
+            orientation="vertical", size_hint=(None, 1), width=dp(78),
+            padding=[0, dp(4), 0, dp(22)],
+        )
+        self.plot_area = BoxLayout(size_hint=(1, 1))
+        body.add_widget(self.y_axis)
+        body.add_widget(self.plot_area)
+        self.add_widget(body)
+
+        self.x_axis = BoxLayout(
+            orientation="horizontal",
+            size_hint=(1, None),
+            height=dp(22),
+            padding=[dp(86), 0, dp(12), 0],
+        )
+        self.add_widget(self.x_axis)
+
+        self._setup_labels()
+        self.plot_area.bind(pos=self._redraw, size=self._redraw)
+
+    def _max_y(self):
+        max_val = max((float(item.get("value", 0)) for item in self.series), default=0.0)
+        if max_val <= 0:
+            return 250000.0
+        step = 50000.0
+        while step * 5 < max_val:
+            step *= 2
+        return step * 5
+
+    def _setup_labels(self):
+        self.y_axis.clear_widgets()
+        max_y = self._max_y()
+        for step_idx in range(5, -1, -1):
+            val = (max_y / 5.0) * step_idx
+            self.y_axis.add_widget(Text(
+                rp(val), size=9, color=MUTED, align="right"
+            ))
+
+        self.x_axis.clear_widgets()
+        for idx, item in enumerate(self.series):
+            align = "left" if idx == 0 else ("right" if idx == len(self.series) - 1 else "center")
+            self.x_axis.add_widget(Text(
+                item.get("label", ""), size=9, color=MUTED, align=align
+            ))
+
+    def _redraw(self, *_):
+        self.plot_area.canvas.after.clear()
+        x0 = self.plot_area.x + dp(8)
+        y0 = self.plot_area.y + dp(8)
+        w = max(dp(20), self.plot_area.width - dp(20))
+        h = max(dp(20), self.plot_area.height - dp(16))
+        max_y = self._max_y()
+
+        with self.plot_area.canvas.after:
+            # 6 garis bantu horizontal halus
+            Color(0.55, 0.56, 0.62, 0.16)
+            for i in range(6):
+                gy = y0 + (h * i / 5.0)
+                Line(points=[x0, gy, x0 + w, gy], width=1.0)
+
+            if not self.series:
+                return
+
+            pts = []
+            count = len(self.series)
+            for idx, item in enumerate(self.series):
+                val = max(0.0, float(item.get("value", 0)))
+                px = x0 + (w * idx / max(1, count - 1)) if count > 1 else x0 + w / 2.0
+                py = y0 + min(1.0, val / max_y) * h
+                pts.extend([px, py])
+
+            # Garis kurva utama mengikuti warna aksen tema aktif
+            Color(*ACCENT)
+            if len(pts) >= 4:
+                Line(points=pts, width=dp(1.8))
+
+            # Titik node pada setiap tanggal
+            for idx in range(0, len(pts), 2):
+                px, py = pts[idx], pts[idx + 1]
+                Color(*ACCENT)
+                Ellipse(pos=(px - dp(4), py - dp(4)), size=(dp(8), dp(8)))
+                Color(*SURFACE)
+                Ellipse(pos=(px - dp(2), py - dp(2)), size=(dp(4), dp(4)))

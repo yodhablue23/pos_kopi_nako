@@ -237,7 +237,7 @@ class Database:
                     if getattr(error, "errno", None) != 1060:
                         raise
 
-            # 3. Pembuatan Tabel Transaksi (Nota Induk Lengkap dengan Bayar & Kembalian)
+            # 3. Pembuatan Tabel Transaksi (Nota Induk Lengkap dengan Bayar, Kembalian, Voucher, & Tipe Pesanan)
             if self.engine == "sqlite":
                 cur.execute(
                     """CREATE TABLE IF NOT EXISTS transaksi (
@@ -247,23 +247,26 @@ class Database:
                         metode_pembayaran TEXT,
                         bayar REAL DEFAULT 0,
                         kembalian REAL DEFAULT 0,
-                        customer_name TEXT
+                        customer_name TEXT,
+                        diskon REAL DEFAULT 0,
+                        kode_voucher TEXT DEFAULT '',
+                        tipe_pesanan TEXT DEFAULT 'Dine-In'
                     )"""
                 )
-                # Migrasi aman: tambahkan kolom bayar dan kembalian jika tabel lama sudah ada
-                try:
-                    cur.execute("ALTER TABLE transaksi ADD COLUMN bayar REAL DEFAULT 0")
-                except sqlite3.OperationalError:
-                    pass
-                try:
-                    cur.execute("ALTER TABLE transaksi ADD COLUMN kembalian REAL DEFAULT 0")
-                except sqlite3.OperationalError:
-                    pass
-                try:
-                    cur.execute("ALTER TABLE transaksi ADD COLUMN customer_name TEXT")
-                except sqlite3.OperationalError as error:
-                    if "duplicate column" not in str(error).lower():
-                        raise
+                # Migrasi aman: tambahkan kolom baru jika tabel lama sudah ada
+                for alter_sql in (
+                    "ALTER TABLE transaksi ADD COLUMN bayar REAL DEFAULT 0",
+                    "ALTER TABLE transaksi ADD COLUMN kembalian REAL DEFAULT 0",
+                    "ALTER TABLE transaksi ADD COLUMN customer_name TEXT",
+                    "ALTER TABLE transaksi ADD COLUMN diskon REAL DEFAULT 0",
+                    "ALTER TABLE transaksi ADD COLUMN kode_voucher TEXT DEFAULT ''",
+                    "ALTER TABLE transaksi ADD COLUMN tipe_pesanan TEXT DEFAULT 'Dine-In'",
+                ):
+                    try:
+                        cur.execute(alter_sql)
+                    except sqlite3.OperationalError as error:
+                        if "duplicate column" not in str(error).lower():
+                            raise
             else:
                 cur.execute(
                     """CREATE TABLE IF NOT EXISTS transaksi (
@@ -273,16 +276,23 @@ class Database:
                         metode_pembayaran VARCHAR(50),
                         bayar DECIMAL(10,2) DEFAULT 0,
                         kembalian DECIMAL(10,2) DEFAULT 0,
-                        customer_name VARCHAR(40) NULL
+                        customer_name VARCHAR(40) NULL,
+                        diskon DECIMAL(10,2) DEFAULT 0,
+                        kode_voucher VARCHAR(30) DEFAULT '',
+                        tipe_pesanan VARCHAR(20) DEFAULT 'Dine-In'
                     )"""
                 )
-                try:
-                    cur.execute(
-                        "ALTER TABLE transaksi ADD COLUMN customer_name VARCHAR(40) NULL"
-                    )
-                except MySQLError as error:
-                    if getattr(error, "errno", None) != 1060:
-                        raise
+                for alter_sql in (
+                    "ALTER TABLE transaksi ADD COLUMN customer_name VARCHAR(40) NULL",
+                    "ALTER TABLE transaksi ADD COLUMN diskon DECIMAL(10,2) DEFAULT 0",
+                    "ALTER TABLE transaksi ADD COLUMN kode_voucher VARCHAR(30) DEFAULT ''",
+                    "ALTER TABLE transaksi ADD COLUMN tipe_pesanan VARCHAR(20) DEFAULT 'Dine-In'",
+                ):
+                    try:
+                        cur.execute(alter_sql)
+                    except MySQLError as error:
+                        if getattr(error, "errno", None) != 1060:
+                            raise
 
             # 4. Pembuatan Tabel Detail Transaksi (Item Belanjaan)
             if self.engine == "sqlite":
@@ -305,6 +315,33 @@ class Database:
                         produk_id INT NOT NULL,
                         jumlah INT NOT NULL,
                         harga DECIMAL(10,2) NOT NULL
+                    )"""
+                )
+
+            # 5. Pembuatan Tabel Mutasi Stok (Audit keluar-masuk stok barang)
+            if self.engine == "sqlite":
+                cur.execute(
+                    """CREATE TABLE IF NOT EXISTS mutasi_stok (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        tanggal TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        produk_id INTEGER NOT NULL,
+                        tipe TEXT NOT NULL,
+                        jumlah INTEGER NOT NULL,
+                        stok_akhir INTEGER NOT NULL,
+                        keterangan TEXT,
+                        FOREIGN KEY (produk_id) REFERENCES produk (id)
+                    )"""
+                )
+            else:
+                cur.execute(
+                    """CREATE TABLE IF NOT EXISTS mutasi_stok (
+                        id INT AUTO_INCREMENT PRIMARY KEY,
+                        tanggal DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        produk_id INT NOT NULL,
+                        tipe VARCHAR(20) NOT NULL,
+                        jumlah INT NOT NULL,
+                        stok_akhir INT NOT NULL,
+                        keterangan VARCHAR(120)
                     )"""
                 )
 
@@ -452,7 +489,10 @@ class Database:
                 "SELECT id, tanggal, total, metode_pembayaran, "
                 "COALESCE(bayar, total) as bayar, "
                 "COALESCE(kembalian, 0) as kembalian, "
-                "COALESCE(customer_name, '') as customer_name "
+                "COALESCE(customer_name, '') as customer_name, "
+                "COALESCE(diskon, 0) as diskon, "
+                "COALESCE(kode_voucher, '') as kode_voucher, "
+                "COALESCE(tipe_pesanan, 'Dine-In') as tipe_pesanan "
                 "FROM transaksi"
             )
             params = []
@@ -493,6 +533,9 @@ class Database:
                     "bayar": float(row["bayar"]),
                     "kembalian": float(row["kembalian"]),
                     "customer_name": row["customer_name"] or "",
+                    "diskon": float(row["diskon"] or 0),
+                    "kode_voucher": row["kode_voucher"] or "",
+                    "tipe_pesanan": row["tipe_pesanan"] or "Dine-In",
                 })
             return orders
         finally:
@@ -616,6 +659,16 @@ class Database:
                     f"Stok sekarang {current_stock}; maksimal bisa ditambah {remaining} item."
                 )
 
+            mutasi_sql = self._prepare_sql(
+                "INSERT INTO mutasi_stok (tanggal, produk_id, tipe, jumlah, stok_akhir, keterangan) "
+                "VALUES (%s, %s, %s, %s, %s, %s)"
+            )
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            cur.execute(
+                mutasi_sql,
+                (now_str, int(row["id"]), "MASUK", quantity, int(row["stok"]), "Restock gudang/kasir"),
+            )
+
             conn.commit()
             cur.close()
             return {
@@ -632,20 +685,13 @@ class Database:
 
     def save_order(
         self, cart, products_by_id, method, total, bayar=None, kembalian=None,
-        customer_name=None,
+        customer_name=None, diskon=0.0, kode_voucher="", tipe_pesanan="Dine-In",
     ):
-        """Menyimpan transaksi kasir dan mengurangi stok barang dalam satu transaksi atomik.
-        
-        Parameter:
-        - cart: Dictionary {product_id: qty}
-        - products_by_id: Dictionary data produk lengkap
-        - method: Metode pembayaran ('Tunai', 'QRIS', 'Kartu')
-        - total: Total nominal belanja
-        - bayar: Nominal uang yang dibayarkan kasir (jika None, default sama dengan total)
-        - kembalian: Nominal kembalian (jika None, default dihitung otomatis)
-        - customer_name: Nama pelanggan atau nomor meja untuk struk transaksi
-        """
+        """Menyimpan transaksi kasir dan mengurangi stok barang dalam satu transaksi atomik."""
         customer_name = normalize_customer_label(customer_name)
+        diskon = max(0.0, float(diskon or 0.0))
+        kode_voucher = str(kode_voucher or "").strip().upper()
+        tipe_pesanan = "Take Away" if str(tipe_pesanan).strip() == "Take Away" else "Dine-In"
         if bayar is None:
             bayar = total
         if kembalian is None:
@@ -680,25 +726,32 @@ class Database:
                     "qty": int(qty),
                     "price": float(row["harga"]),
                     "subtotal": float(row["harga"]) * int(qty),
+                    "stok_awal": int(row["stok"]),
                 })
+
+            subtotal = sum(item["subtotal"] for item in receipt_items)
 
             # 2. Masukkan data ke tabel induk transaksi
             transaction_dt = datetime.now()
             transaction_timestamp = transaction_dt.strftime("%Y-%m-%d %H:%M:%S")
             sql_trans = self._prepare_sql(
                 "INSERT INTO transaksi "
-                "(tanggal, total, metode_pembayaran, bayar, kembalian, customer_name) "
-                "VALUES (%s, %s, %s, %s, %s, %s)"
+                "(tanggal, total, metode_pembayaran, bayar, kembalian, customer_name, diskon, kode_voucher, tipe_pesanan) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"
             )
             cur.execute(
                 sql_trans, (
                     transaction_timestamp, total, method, bayar, kembalian,
-                    customer_name,
+                    customer_name, diskon, kode_voucher, tipe_pesanan,
                 )
             )
             transaction_id = cur.lastrowid
 
-            # 3. Masukkan item detail transaksi dan perbarui stok barang
+            # 3. Masukkan item detail transaksi, perbarui stok barang, dan catat mutasi stok
+            sql_mutasi = self._prepare_sql(
+                "INSERT INTO mutasi_stok (tanggal, produk_id, tipe, jumlah, stok_akhir, keterangan) "
+                "VALUES (%s, %s, %s, %s, %s, %s)"
+            )
             for item in receipt_items:
                 sql_detail = self._prepare_sql(
                     "INSERT INTO detail_transaksi (transaksi_id, produk_id, jumlah, harga) VALUES (%s, %s, %s, %s)"
@@ -712,6 +765,19 @@ class Database:
                 if cur.rowcount != 1:
                     raise ValueError(f"Stok barang '{item['name']}' berubah saat diproses. Silakan ulangi checkout.")
 
+                stok_akhir = item["stok_awal"] - item["qty"]
+                cur.execute(
+                    sql_mutasi,
+                    (
+                        transaction_timestamp,
+                        item["id"],
+                        "TERJUAL",
+                        item["qty"],
+                        stok_akhir,
+                        f"Transaksi KN-{transaction_id} ({tipe_pesanan})",
+                    ),
+                )
+
             conn.commit()
             cur.close()
             return {
@@ -719,6 +785,10 @@ class Database:
                 "date": transaction_dt.strftime("%Y-%m-%d"),
                 "time": transaction_dt.strftime("%H:%M:%S"),
                 "payment": method,
+                "subtotal": float(subtotal),
+                "diskon": float(diskon),
+                "kode_voucher": kode_voucher,
+                "tipe_pesanan": tipe_pesanan,
                 "total": float(total),
                 "bayar": float(bayar),
                 "kembalian": float(kembalian),
@@ -752,12 +822,27 @@ class Database:
                 "SET stok = CASE WHEN stok + %s > %s THEN %s ELSE stok + %s END "
                 "WHERE id = %s"
             )
+            sql_select_stock = self._prepare_sql(
+                "SELECT stok FROM produk WHERE id = %s"
+            )
+            sql_mutasi = self._prepare_sql(
+                "INSERT INTO mutasi_stok (tanggal, produk_id, tipe, jumlah, stok_akhir, keterangan) "
+                "VALUES (%s, %s, %s, %s, %s, %s)"
+            )
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             for item in items:
                 qty = int(item["jumlah"])
                 produk_id = int(item["produk_id"])
                 cur.execute(
                     sql_restore_stock,
                     (qty, MAX_PRODUCT_STOCK, MAX_PRODUCT_STOCK, qty, produk_id),
+                )
+                cur.execute(sql_select_stock, (produk_id,))
+                prod_row = cur.fetchone()
+                stok_akhir = int(prod_row["stok"]) if prod_row is not None else 0
+                cur.execute(
+                    sql_mutasi,
+                    (now_str, produk_id, "RETUR_HAPUS", qty, stok_akhir, f"Hapus Transaksi KN-{transaction_id}"),
                 )
 
             sql_del_detail = self._prepare_sql(
@@ -805,6 +890,119 @@ class Database:
                     "jumlah": int(row["jumlah"]),
                     "harga": float(row["harga"]),
                     "subtotal": float(row["subtotal"]),
+                }
+                for row in rows
+            ]
+        finally:
+            conn.close()
+
+    def get_stock_mutations(self, limit=30):
+        """Mengambil riwayat mutasi keluar-masuk stok produk terbaru."""
+        conn = self.connect()
+        try:
+            if self.engine == "mysql":
+                cur = conn.cursor(dictionary=True)
+            else:
+                cur = conn.cursor()
+
+            sql = self._prepare_sql(
+                """SELECT m.id, m.tanggal, p.nama, m.tipe, m.jumlah, m.stok_akhir, m.keterangan
+                   FROM mutasi_stok m
+                   JOIN produk p ON p.id = m.produk_id
+                   ORDER BY m.id DESC
+                   LIMIT %s"""
+            )
+            cur.execute(sql, (int(limit),))
+            rows = cur.fetchall()
+            cur.close()
+            result = []
+            for row in rows:
+                raw_dt = row["tanggal"]
+                if isinstance(raw_dt, datetime):
+                    dt_str = raw_dt.strftime("%Y-%m-%d %H:%M")
+                else:
+                    dt_str = str(raw_dt or "")[:16]
+                result.append({
+                    "id": int(row["id"]),
+                    "tanggal": dt_str,
+                    "nama": row["nama"],
+                    "tipe": row["tipe"],
+                    "jumlah": int(row["jumlah"]),
+                    "stok_akhir": int(row["stok_akhir"]),
+                    "keterangan": row["keterangan"] or "",
+                })
+            return result
+        finally:
+            conn.close()
+
+    def get_top_products(self, start_at=None, end_at=None, limit=3):
+        """Mengambil produk terlaris berdasarkan total kuantitas terjual pada periode laporan."""
+        conn = self.connect()
+        try:
+            if self.engine == "mysql":
+                cur = conn.cursor(dictionary=True)
+            else:
+                cur = conn.cursor()
+
+            sql = (
+                "SELECT p.id, p.nama, p.kategori, "
+                "COALESCE(SUM(dt.jumlah), 0) AS total_qty, "
+                "COALESCE(SUM(dt.jumlah * dt.harga), 0) AS total_revenue "
+                "FROM detail_transaksi dt "
+                "JOIN transaksi t ON t.id = dt.transaksi_id "
+                "JOIN produk p ON p.id = dt.produk_id"
+            )
+            params = []
+            conditions = []
+            if start_at is not None:
+                conditions.append("t.tanggal >= %s")
+                params.append(start_at)
+            if end_at is not None:
+                conditions.append("t.tanggal < %s")
+                params.append(end_at)
+            if conditions:
+                sql += " WHERE " + " AND ".join(conditions)
+            sql += " GROUP BY p.id, p.nama, p.kategori ORDER BY total_qty DESC, total_revenue DESC LIMIT %s"
+            params.append(int(limit))
+
+            cur.execute(self._prepare_sql(sql), tuple(params))
+            rows = cur.fetchall()
+            cur.close()
+            return [
+                {
+                    "id": int(row["id"]),
+                    "name": row["nama"],
+                    "category": row["kategori"],
+                    "qty": int(row["total_qty"]),
+                    "revenue": float(row["total_revenue"]),
+                }
+                for row in rows
+            ]
+        finally:
+            conn.close()
+
+    def get_low_stock_products(self, threshold=15):
+        """Mengambil daftar produk aktif yang stoknya menipis (< threshold)."""
+        conn = self.connect()
+        try:
+            if self.engine == "mysql":
+                cur = conn.cursor(dictionary=True)
+            else:
+                cur = conn.cursor()
+
+            sql = self._prepare_sql(
+                "SELECT id, nama, kategori, stok FROM produk "
+                "WHERE aktif = 1 AND stok < %s ORDER BY stok ASC, id ASC"
+            )
+            cur.execute(sql, (int(threshold),))
+            rows = cur.fetchall()
+            cur.close()
+            return [
+                {
+                    "id": int(row["id"]),
+                    "name": row["nama"],
+                    "category": row["kategori"],
+                    "stok": int(row["stok"]),
                 }
                 for row in rows
             ]

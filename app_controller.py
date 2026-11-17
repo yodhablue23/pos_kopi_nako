@@ -8,6 +8,7 @@ Modul ini adalah pusat logika aplikasi kasir (State Manager) yang mengontrol:
 5. Pencetakan struk pembayaran lengkap dan ekspor berkas fisik .txt.
 """
 from datetime import datetime, timedelta
+import csv
 import json
 from pathlib import Path
 import shutil
@@ -37,10 +38,11 @@ from kivy.uix.scrollview import ScrollView
 from kivy.uix.spinner import Spinner
 from kivy.uix.image import Image
 
-from config import BARCODE_PATH
+from config import BARCODE_PATH, LOGO_PATH, VOUCHER_CODES
 from theme import (
-    ACCENT_ALT, ACCENT_THEMES, CORAL, DANGER_TEXT, MUTED, NAV_COLORS, ON_ACCENT,
-    RECEIPT_PAPER, RECEIPT_TEXT, SUCCESS_TEXT, SURFACE, TEAL, TEXT, apply_theme,
+    ACCENT, ACCENT_ALT, ACCENT_TEXT, ACCENT_THEMES, BORDER, CORAL, DANGER_TEXT,
+    MUTED, NAV_COLORS, ON_ACCENT, RECEIPT_PAPER, RECEIPT_TEXT, SUCCESS_TEXT,
+    SURFACE, TEAL, TEXT, apply_theme,
 )
 from database import (
     Database, MAX_CUSTOMER_LABEL_LENGTH, MAX_PRODUCT_STOCK,
@@ -96,6 +98,9 @@ class POSApp(App):
         self.current_user = None    # Menyimpan data kasir/admin yang sedang login
         self.transaction_logs = []  # Log audit transaksi kasir (metode, bank debit, total)
         self.customer_name = ""     # Nama pelanggan / nomor meja aktif
+        self.order_type = "Dine-In" # Tipe layanan: 'Dine-In' atau 'Take Away'
+        self.voucher_code = ""      # Kode promo voucher aktif
+        self.cart_notes = {}        # Catatan kustomisasi racikan per product_id
         self.theme_settings_path = Path.home() / "Documents" / "POS Kopi Nako" / "settings.json"
         self.theme_mode, self.theme_accent = self.load_theme_preferences()
         apply_theme(self.theme_mode, self.theme_accent)
@@ -103,6 +108,7 @@ class POSApp(App):
         self.db_error = None
         self.report_period = "daily"
         self.report_orders = []
+        self.report_top_products = []
         self.report_error = None
         self.report_loading = False
 
@@ -124,39 +130,164 @@ class POSApp(App):
         self.sm.add_widget(CartPage(name="cart"))
         self.sm.add_widget(ReportsPage(name="reports"))
 
-        # Root layout yang memuat layar utama dan bar navigasi bawah
-        root = BoxLayout(orientation="vertical", spacing=0)
-        root.add_widget(self.sm)
+        # Root layout horizontal: Sidebar Kiri + Kolom Utama (Top Header Bar + ScreenManager)
+        root = BoxLayout(orientation="horizontal", spacing=0)
+        self.main_column = BoxLayout(orientation="vertical", spacing=0)
+        self.main_column.add_widget(self.sm)
+        root.add_widget(self.main_column)
 
-        # Bar navigasi bawah terpusat (Centered Bottom Navigation Container)
-        self.nav_wrapper = AnchorLayout(
-            anchor_x="center", anchor_y="center",
-            size_hint=(1, None), height=dp(0),
-            padding=[dp(12), dp(6), dp(12), dp(8)]
+        # Top Header Bar ala Dashboard POS Referensi
+        self.top_bar = Card(
+            orientation="horizontal",
+            size_hint=(1, None),
+            height=dp(54),
+            padding=[dp(18), dp(8), dp(18), dp(8)],
+            spacing=dp(10),
+            color=SURFACE,
+            radius=0,
+            border_color=BORDER,
         )
+        self.menu_icon_box = Card(
+            orientation="vertical",
+            size_hint=(None, None),
+            size=(dp(34), dp(34)),
+            color=tuple(ACCENT[:3]) + (0.14,),
+            radius=8,
+        )
+        self.menu_icon_label = Text("=", size=16, bold=True, color=ACCENT_TEXT, align="center")
+        self.menu_icon_box.add_widget(self.menu_icon_label)
+        self.top_bar.add_widget(self.menu_icon_box)
+
+        self.top_bar_title = Text(
+            "Dashboard", size=15, bold=True, color=TEXT,
+            size_hint_x=None, width=dp(240),
+        )
+        self.top_bar.add_widget(self.top_bar_title)
+        self.top_bar.add_widget(BoxLayout())  # Spacer tengah
+
+        self.theme_btn = button(
+            "TEMA", self.open_global_theme_settings, False, 34,
+            outline=True, outline_color=BORDER,
+        )
+        self.theme_btn.size_hint_x = None
+        self.theme_btn.width = dp(76)
+        self.top_bar.add_widget(self.theme_btn)
+
+        self.notif_badge = Card(
+            orientation="vertical",
+            size_hint=(None, None),
+            size=(dp(36), dp(36)),
+            color=(0.45, 0.48, 0.56, 0.12),
+            radius=18,
+        )
+        self.notif_label = Text("0", size=11, bold=True, color=TEXT, align="center")
+        self.notif_badge.add_widget(self.notif_label)
+        self.top_bar.add_widget(self.notif_badge)
+
+        self.top_user_label = Text(
+            "", size=11, bold=True, color=MUTED,
+            size_hint_x=None, width=dp(135), align="right",
+        )
+        self.top_bar.add_widget(self.top_user_label)
+
+        self.avatar_badge = Card(
+            orientation="vertical",
+            size_hint=(None, None),
+            size=(dp(36), dp(36)),
+            color=tuple(ACCENT[:3]) + (0.18,),
+            radius=18,
+        )
+        self.avatar_label = Text(
+            "A", size=13, bold=True, color=ACCENT_TEXT, align="center"
+        )
+        self.avatar_badge.add_widget(self.avatar_label)
+        self.top_bar.add_widget(self.avatar_badge)
+
+        # Sidebar Navigasi Kiri bergaya Brand Header (Logo + Kopi Nako di Kiri Atas)
+        self.nav_wrapper = Card(
+            orientation="vertical",
+            size_hint=(None, 1),
+            width=dp(162),
+            padding=[dp(12), dp(14), dp(12), dp(14)],
+            spacing=dp(8),
+            color=SURFACE,
+            radius=0,
+            border_color=BORDER,
+        )
+        brand_header = BoxLayout(
+            orientation="horizontal",
+            size_hint=(1, None),
+            height=dp(44),
+            spacing=dp(10),
+        )
+        self.brand_box = Card(
+            orientation="vertical",
+            size_hint=(None, None),
+            size=(dp(38), dp(38)),
+            padding=dp(3),
+            color=ACCENT,
+            radius=10,
+        )
+        if LOGO_PATH.exists():
+            self.brand_label = None
+            self.brand_box.add_widget(Image(
+                source=str(LOGO_PATH),
+                size_hint=(1, 1),
+                fit_mode="contain",
+            ))
+        else:
+            self.brand_label = Text(
+                "KN", size=14, bold=True, color=ON_ACCENT, align="center"
+            )
+            self.brand_box.add_widget(self.brand_label)
+        brand_header.add_widget(self.brand_box)
+
+        brand_titles = BoxLayout(orientation="vertical", spacing=dp(1))
+        self.brand_title_text = Text(
+            "Kopi Nako", size=14, bold=True, color=TEXT,
+            size_hint_y=None, height=dp(22),
+        )
+        self.brand_sub_text = Text(
+            "POS System", size=9, color=MUTED,
+            size_hint_y=None, height=dp(14),
+        )
+        brand_titles.add_widget(self.brand_title_text)
+        brand_titles.add_widget(self.brand_sub_text)
+        brand_header.add_widget(brand_titles)
+        self.nav_wrapper.add_widget(brand_header)
+
+        self.sidebar_section_label = Text(
+            "NAVIGASI", size=9, bold=True, color=MUTED,
+            size_hint_y=None, height=dp(20),
+        )
+        self.nav_wrapper.add_widget(self.sidebar_section_label)
 
         nav = GridLayout(
-            cols=5, size_hint=(None, None), width=dp(660), height=dp(46),
-            spacing=dp(8)
+            cols=1, size_hint=(1, None), spacing=dp(8)
         )
+        nav.bind(minimum_height=nav.setter("height"))
         self.nav = nav
         self.nav_buttons = {}
         for title, screen in [
             ("HOME", "home"),
             ("PRODUK", "products"),
             ("KERANJANG", "cart"),
-            ("LAPORAN", "reports")
+            ("LAPORAN", "reports"),
         ]:
-            b = button(title, lambda s=screen: self.go(s), False, 44)
+            b = button(title, lambda s=screen: self.go(s), False, 42)
+            b.font_size = dp(11)
             self.nav_buttons[screen] = b
             nav.add_widget(b)
 
-        self.logout_button = button("KELUAR", self.logout, True, 44)
-        nav.add_widget(self.logout_button)
         self.nav_wrapper.add_widget(nav)
+        self.nav_wrapper.add_widget(BoxLayout())  # Spacer pendorong tombol keluar ke bawah
+
+        self.logout_button = button("KELUAR", self.logout, True, 42)
+        self.logout_button.font_size = dp(11)
+        self.nav_wrapper.add_widget(self.logout_button)
         self.root_layout = root
 
-        # Di halaman login: nav_wrapper TIDAK dimasukkan ke root_layout agar 100% bebas bocor visual
+        # Di halaman login: sidebar & top_bar tidak ditampilkan agar halaman login bersih
         self.nav_wrapper.opacity = 0
         self.nav_wrapper.disabled = True
         self.sm.current = "login"
@@ -206,6 +337,34 @@ class POSApp(App):
             if rerender:
                 self.sm.get_screen(self.sm.current).render()
             self.update_nav()
+
+    def open_global_theme_settings(self):
+        """Membuka dialog pengaturan tampilan dari Top Header Bar di halaman mana saja."""
+        if hasattr(self, "sm"):
+            home_screen = self.sm.get_screen("home")
+            if hasattr(home_screen, "open_theme_settings"):
+                home_screen.open_theme_settings()
+
+    def _show_app_shell(self):
+        """Menampilkan Sidebar Kiri dan Top Header Bar setelah login berhasil."""
+        if hasattr(self, "root_layout") and self.nav_wrapper not in self.root_layout.children:
+            self.root_layout.add_widget(self.nav_wrapper, index=len(self.root_layout.children))
+        if hasattr(self, "main_column") and hasattr(self, "top_bar"):
+            if self.top_bar not in self.main_column.children:
+                self.main_column.add_widget(self.top_bar, index=len(self.main_column.children))
+        self.nav_wrapper.opacity = 1
+        self.nav_wrapper.disabled = False
+        self.nav_wrapper.width = dp(162)
+
+    def _hide_app_shell(self):
+        """Menyembunyikan Sidebar Kiri dan Top Header Bar saat kembali ke halaman login."""
+        if hasattr(self, "root_layout") and self.nav_wrapper in self.root_layout.children:
+            self.root_layout.remove_widget(self.nav_wrapper)
+        if hasattr(self, "main_column") and hasattr(self, "top_bar"):
+            if self.top_bar in self.main_column.children:
+                self.main_column.remove_widget(self.top_bar)
+        self.nav_wrapper.opacity = 0
+        self.nav_wrapper.disabled = True
 
     def on_start(self):
         """Dipanggil oleh Kivy tepat setelah jendela aplikasi muncul."""
@@ -273,13 +432,11 @@ class POSApp(App):
         # Login berhasil
         self.current_user = user
         self.cart.clear()
+        self.cart_notes.clear()
         self.customer_name = ""
-        if self.nav_wrapper not in self.root_layout.children:
-            self.root_layout.add_widget(self.nav_wrapper)
-        self.nav_wrapper.opacity = 1
-        self.nav_wrapper.disabled = False
-        self.nav_wrapper.height = dp(62)
-        self.nav.height = dp(46)
+        self.order_type = "Dine-In"
+        self.voucher_code = ""
+        self._show_app_shell()
         target_screen = "products" if self.user_role() == "pelanggan" else "home"
         self.sm.current = target_screen
         self.refresh_data()
@@ -297,13 +454,11 @@ class POSApp(App):
 
         self.current_user = role_pelanggan.build_customer_session()
         self.cart.clear()
+        self.cart_notes.clear()
         self.customer_name = ""
-        if self.nav_wrapper not in self.root_layout.children:
-            self.root_layout.add_widget(self.nav_wrapper)
-        self.nav_wrapper.opacity = 1
-        self.nav_wrapper.disabled = False
-        self.nav_wrapper.height = dp(62)
-        self.nav.height = dp(46)
+        self.order_type = "Dine-In"
+        self.voucher_code = ""
+        self._show_app_shell()
         self.sm.current = "products"
         self.refresh_data()
         self.refresh_report()
@@ -316,11 +471,11 @@ class POSApp(App):
             return
         self.current_user = None
         self.cart.clear()
+        self.cart_notes.clear()
         self.customer_name = ""
-        if self.nav_wrapper in self.root_layout.children:
-            self.root_layout.remove_widget(self.nav_wrapper)
-        self.nav_wrapper.opacity = 0
-        self.nav_wrapper.disabled = True
+        self.order_type = "Dine-In"
+        self.voucher_code = ""
+        self._hide_app_shell()
         self.sm.current = "login"
         self.update_nav()
         self.sm.get_screen("login").render()
@@ -329,10 +484,7 @@ class POSApp(App):
     def go(self, name):
         """Berpindah ke halaman lain dengan validasi login dan hak akses role."""
         if self.current_user is None:
-            if hasattr(self, "root_layout") and self.nav_wrapper in self.root_layout.children:
-                self.root_layout.remove_widget(self.nav_wrapper)
-            self.nav_wrapper.opacity = 0
-            self.nav_wrapper.disabled = True
+            self._hide_app_shell()
             self.sm.current = "login"
             return
         if self.db_error:
@@ -350,7 +502,7 @@ class POSApp(App):
         self.sm.get_screen(name).render()
 
     def update_nav(self):
-        """Memperbarui visual navigasi bawah secara dinamis sesuai ALLOWED_SCREENS role aktif."""
+        """Memperbarui Sidebar Kiri dan Top Header Bar secara dinamis sesuai role aktif."""
         allowed = self.role_permissions().get(
             "allowed_screens", ("home", "products", "cart", "reports")
         )
@@ -363,7 +515,7 @@ class POSApp(App):
                 screen for screen in ("home", "products", "cart", "reports")
                 if screen in allowed and screen in self.nav_buttons
             ]
-            self.nav.cols = len(visible_screens) + (1 if hasattr(self, "logout_button") else 0)
+            self.nav.cols = 1
             for screen in visible_screens:
                 btn = self.nav_buttons[screen]
                 btn.disabled = False
@@ -372,25 +524,108 @@ class POSApp(App):
             if hasattr(self, "logout_button"):
                 self.logout_button.disabled = False
                 self.logout_button.opacity = 1
-                self.nav.add_widget(self.logout_button)
 
         for name, btn in self.nav_buttons.items():
             active = self.sm.current == name
             if active:
-                # Active State: Warna kontras solid yang jelas sesuai halaman
-                solid_color = NAV_COLORS.get(name, TEAL)
+                solid_color = list(NAV_COLORS.get(name, ACCENT))
                 if hasattr(btn, "_bg_color"):
                     btn._bg_color.rgba = solid_color
+                btn._bg_default = solid_color
+                btn._text_default = list(ON_ACCENT)
                 btn.color = ON_ACCENT
             else:
-                # Inactive State: Lebih redup / outline lembut
+                inactive_bg = tuple(SURFACE[:3]) + (0.65,)
                 if hasattr(btn, "_bg_color"):
-                    btn._bg_color.rgba = tuple(SURFACE[:3]) + (0.5,)
+                    btn._bg_color.rgba = inactive_bg
+                btn._bg_default = inactive_bg
+                btn._text_default = list(TEXT)
                 btn.color = TEXT
         if hasattr(self, "logout_button"):
             if hasattr(self.logout_button, "_bg_color"):
                 self.logout_button._bg_color.rgba = CORAL
+            self.logout_button._bg_default = list(CORAL)
+            self.logout_button._text_default = list(ON_ACCENT)
             self.logout_button.color = ON_ACCENT
+
+        # Sinkronisasi warna Sidebar Kiri & Top Header Bar dengan tema aktif (Light/Dark + Aksen)
+        if hasattr(self, "nav_wrapper"):
+            if hasattr(self.nav_wrapper, "_bg_color"):
+                self.nav_wrapper._bg_color.rgba = SURFACE
+            if hasattr(self.nav_wrapper, "_outline_color"):
+                self.nav_wrapper._outline_color.rgba = BORDER
+        if hasattr(self, "top_bar"):
+            if hasattr(self.top_bar, "_bg_color"):
+                self.top_bar._bg_color.rgba = SURFACE
+            if hasattr(self.top_bar, "_outline_color"):
+                self.top_bar._outline_color.rgba = BORDER
+        if hasattr(self, "brand_box") and hasattr(self.brand_box, "_bg_color"):
+            self.brand_box._bg_color.rgba = ACCENT
+        if getattr(self, "brand_label", None) is not None:
+            self.brand_label.color = ON_ACCENT
+        if hasattr(self, "brand_title_text"):
+            self.brand_title_text.color = TEXT
+        if hasattr(self, "brand_sub_text"):
+            self.brand_sub_text.color = MUTED
+        if hasattr(self, "sidebar_section_label"):
+            self.sidebar_section_label.color = MUTED
+        if hasattr(self, "menu_icon_box") and hasattr(self.menu_icon_box, "_bg_color"):
+            self.menu_icon_box._bg_color.rgba = tuple(ACCENT[:3]) + (0.14,)
+        if hasattr(self, "menu_icon_label"):
+            self.menu_icon_label.color = ACCENT_TEXT
+        if hasattr(self, "theme_btn"):
+            theme_bg = tuple(ACCENT[:3]) + (0.10,)
+            self.theme_btn.color = TEXT
+            self.theme_btn._text_default = list(TEXT)
+            self.theme_btn._bg_default = theme_bg
+            self.theme_btn._bg_pressed = list(ACCENT)
+            if hasattr(self.theme_btn, "_line_color"):
+                self.theme_btn._line_color.rgba = BORDER
+            if hasattr(self.theme_btn, "_bg_color"):
+                self.theme_btn._bg_color.rgba = theme_bg
+        if hasattr(self, "notif_badge") and hasattr(self.notif_badge, "_bg_color"):
+            self.notif_badge._bg_color.rgba = tuple(ACCENT[:3]) + (0.14,)
+        if hasattr(self, "avatar_badge") and hasattr(self.avatar_badge, "_bg_color"):
+            self.avatar_badge._bg_color.rgba = tuple(ACCENT[:3]) + (0.18,)
+        if hasattr(self, "avatar_label"):
+            self.avatar_label.color = ACCENT_TEXT
+
+        # Perbarui informasi pada Top Header Bar
+        page_titles = {
+            "home": "Dashboard",
+            "products": "Katalog Produk",
+            "cart": "Keranjang Pesanan",
+            "reports": "Laporan Penjualan",
+        }
+        if hasattr(self, "top_bar_title"):
+            self.top_bar_title.text = page_titles.get(self.sm.current, "POS Kopi Nako")
+            self.top_bar_title.color = TEXT
+        if hasattr(self, "top_user_label") and hasattr(self, "avatar_label"):
+            self.top_user_label.color = MUTED
+            if self.current_user:
+                user_name = str(self.current_user.get("nama", "User"))
+                role_label = str(self.current_user.get("role", "")).upper()
+                self.top_user_label.text = f"{user_name} ({role_label})"
+                self.avatar_label.text = user_name[:1].upper() if user_name else "U"
+            else:
+                self.top_user_label.text = ""
+                self.avatar_label.text = "U"
+        if hasattr(self, "notif_label"):
+            if self.user_role() == "pelanggan":
+                cart_count = sum(self.cart.values())
+                self.notif_label.text = f"{cart_count}"
+                self.notif_label.color = ACCENT_TEXT if cart_count > 0 else TEXT
+            else:
+                low_count = sum(1 for p in getattr(self, "products", []) if int(p.get("stok", 0)) < 15)
+                self.notif_label.text = str(low_count)
+                self.notif_label.color = DANGER_TEXT if low_count > 0 else TEXT
+        if "cart" in getattr(self, "nav_buttons", {}):
+            cart_total_qty = sum(self.cart.values())
+            self.nav_buttons["cart"].text = (
+                f"KERANJANG ({cart_total_qty})"
+                if cart_total_qty > 0
+                else "KERANJANG"
+            )
 
     def refresh_data(self):
         """Mengambil ulang data produk dan riwayat transaksi dari database."""
@@ -561,12 +796,20 @@ class POSApp(App):
             if self.db_error:
                 raise ValueError(self.db_error)
             start, end = self._report_range()
+            start_str = start.strftime("%Y-%m-%d %H:%M:%S")
+            end_str = end.strftime("%Y-%m-%d %H:%M:%S")
             self.report_orders = self.db.get_orders(
-                start_at=start.strftime("%Y-%m-%d %H:%M:%S"),
-                end_at=end.strftime("%Y-%m-%d %H:%M:%S"),
+                start_at=start_str,
+                end_at=end_str,
+            )
+            self.report_top_products = self.db.get_top_products(
+                start_at=start_str,
+                end_at=end_str,
+                limit=3,
             )
         except Exception as error:
             self.report_orders = []
+            self.report_top_products = []
             self.report_error = str(error)
         finally:
             self.report_loading = False
@@ -577,6 +820,51 @@ class POSApp(App):
         self.refresh_report(period)
         if hasattr(self, "sm") and self.sm.current == "reports":
             self.sm.get_screen("reports").render()
+
+    def export_report_csv(self):
+        """Mengekspor daftar transaksi pada periode laporan aktif ke file CSV (Excel)."""
+        if not self.report_orders:
+            self.notice("Belum ada data transaksi pada periode ini untuk diekspor.")
+            return None
+        try:
+            folder = Path.home() / "Documents" / "POS Kopi Nako" / "Laporan"
+            folder.mkdir(parents=True, exist_ok=True)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = folder / f"laporan_{self.report_period}_{timestamp}.csv"
+            with filename.open("w", newline="", encoding="utf-8-sig") as csv_file:
+                writer = csv.writer(csv_file)
+                writer.writerow([
+                    "ID Transaksi",
+                    "Tanggal",
+                    "Waktu",
+                    "Pelanggan / Meja",
+                    "Tipe Pesanan",
+                    "Metode Pembayaran",
+                    "Kode Voucher",
+                    "Diskon (Rp)",
+                    "Total Tagihan (Rp)",
+                    "Total Bayar (Rp)",
+                    "Kembalian (Rp)",
+                ])
+                for order in self.report_orders:
+                    writer.writerow([
+                        order.get("id", ""),
+                        order.get("date", ""),
+                        order.get("time", ""),
+                        order.get("customer_name", "") or "Pelanggan Umum",
+                        order.get("tipe_pesanan", "Dine-In"),
+                        order.get("payment", "-"),
+                        order.get("kode_voucher", "") or "-",
+                        int(order.get("diskon", 0)),
+                        int(order.get("total", 0)),
+                        int(order.get("bayar", 0)),
+                        int(order.get("kembalian", 0)),
+                    ])
+            self.notice(f"Laporan CSV berhasil diekspor ke:\n{filename}")
+            return str(filename)
+        except OSError as error:
+            self.notice(f"Gagal mengekspor laporan CSV:\n{error}")
+            return None
 
     # -------------------------------------------------------------------------
     # Pengelolaan Keranjang Belanja
@@ -589,9 +877,24 @@ class POSApp(App):
             self.notice(f"Stok {product['name']} tidak mencukupi!")
             return
         self.cart[pid] = current_qty + 1
+        self.update_nav()
         if self.sm.current == "cart":
             self.sm.get_screen("cart").render()
         self.notice(f"{product['name']} ditambahkan ke keranjang.")
+
+    def set_item_note(self, product_id, note_text):
+        """Menyimpan catatan kustomisasi racikan (gula, es, catatan) untuk produk di keranjang."""
+        cleaned = " ".join(str(note_text or "").split())[:60]
+        if cleaned:
+            self.cart_notes[product_id] = cleaned
+        else:
+            self.cart_notes.pop(product_id, None)
+        if hasattr(self, "sm") and self.sm.current in ("cart", "products"):
+            self.sm.get_screen(self.sm.current).render()
+
+    def get_item_note(self, product_id):
+        """Mengambil catatan kustomisasi racikan untuk produk di keranjang."""
+        return self.cart_notes.get(product_id, "")
 
     def set_qty(self, pid, raw_quantity):
         """Menetapkan jumlah item langsung dari input keranjang."""
@@ -617,8 +920,10 @@ class POSApp(App):
             return False
         if quantity == 0:
             self.cart.pop(pid, None)
+            self.cart_notes.pop(pid, None)
         else:
             self.cart[pid] = quantity
+        self.update_nav()
         self.sm.get_screen("cart").render()
         return True
 
@@ -627,12 +932,79 @@ class POSApp(App):
         current_qty = self.cart.get(pid, 0)
         return self.set_qty(pid, current_qty + delta)
 
-    def cart_total(self):
-        """Menghitung akumulasi total harga belanjaan seluruh item di keranjang."""
+    def cart_subtotal(self):
+        """Menghitung akumulasi subtotal harga belanjaan sebelum diskon voucher."""
         return sum(
             self.products_by_id[pid]["price"] * qty
             for pid, qty in self.cart.items()
+            if pid in self.products_by_id
         )
+
+    def cart_discount(self):
+        """Menghitung nominal diskon dari kode voucher aktif berdasarkan subtotal keranjang."""
+        code = str(getattr(self, "voucher_code", "") or "").strip().upper()
+        if not code or code not in VOUCHER_CODES:
+            return 0.0
+        subtotal = float(self.cart_subtotal())
+        rule = VOUCHER_CODES[code]
+        if subtotal < float(rule.get("min_subtotal", 0)):
+            return 0.0
+        if rule["type"] == "percent":
+            raw_disc = subtotal * (float(rule["value"]) / 100.0)
+        else:
+            raw_disc = float(rule["value"])
+        max_disc = float(rule.get("max_discount", raw_disc))
+        return min(subtotal, raw_disc, max_disc)
+
+    def cart_total(self):
+        """Menghitung total tagihan bersih setelah dikurangi diskon voucher."""
+        return max(0.0, float(self.cart_subtotal()) - float(self.cart_discount()))
+
+    def set_order_type(self, order_type):
+        """Mengatur tipe layanan pesanan ('Dine-In' atau 'Take Away')."""
+        self.order_type = "Take Away" if order_type == "Take Away" else "Dine-In"
+        if hasattr(self, "sm") and self.sm.current == "cart":
+            self.sm.get_screen("cart").render()
+
+    def apply_voucher(self, raw_code):
+        """Memvalidasi dan menerapkan kode voucher promo pada keranjang aktif."""
+        code = str(raw_code or "").strip().upper()
+        if not code:
+            self.voucher_code = ""
+            if hasattr(self, "sm") and self.sm.current == "cart":
+                self.sm.get_screen("cart").render()
+            self.notice("Kode voucher dikosongkan.")
+            return False
+
+        if code not in VOUCHER_CODES:
+            self.notice(
+                "Kode voucher tidak ditemukan.\n"
+                f"Gunakan: {', '.join(VOUCHER_CODES.keys())}"
+            )
+            return False
+
+        rule = VOUCHER_CODES[code]
+        subtotal = self.cart_subtotal()
+        min_sub = float(rule.get("min_subtotal", 0))
+        if subtotal < min_sub:
+            self.notice(
+                f"Voucher {code} membutuhkan minimal belanja {rp(min_sub)}.\n"
+                f"Subtotal saat ini: {rp(subtotal)}."
+            )
+            return False
+
+        self.voucher_code = code
+        disc = self.cart_discount()
+        if hasattr(self, "sm") and self.sm.current == "cart":
+            self.sm.get_screen("cart").render()
+        self.notice(f"Voucher {code} diterapkan!\nHemat {rp(disc)} ({rule['label']}).")
+        return True
+
+    def clear_voucher(self):
+        """Menghapus kode voucher aktif dari keranjang."""
+        self.voucher_code = ""
+        if hasattr(self, "sm") and self.sm.current == "cart":
+            self.sm.get_screen("cart").render()
 
     def sales_today(self):
         """Menghitung total omzet penjualan untuk tanggal hari ini."""
@@ -645,6 +1017,37 @@ class POSApp(App):
         """Menghitung jumlah transaksi pada tanggal hari ini."""
         today = datetime.now().strftime("%Y-%m-%d")
         return sum(1 for order in self.orders if order["date"] == today)
+
+    def sales_this_month(self, reference=None):
+        """Menghitung akumulasi omzet pada bulan berjalan untuk indikator Target Bulan Ini."""
+        current = reference or datetime.now()
+        month_prefix = current.strftime("%Y-%m")
+        return sum(
+            float(order.get("total", 0))
+            for order in self.orders
+            if str(order.get("date", "")).startswith(month_prefix)
+        )
+
+    def revenue_trend_series(self, days=7, reference=None):
+        """Menghasilkan seri data omzet harian (7 hari terakhir) untuk grafik Tren Pendapatan."""
+        current = (reference or datetime.now()).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        totals_by_date = {}
+        for order in self.orders:
+            d_key = str(order.get("date", ""))
+            totals_by_date[d_key] = totals_by_date.get(d_key, 0.0) + float(order.get("total", 0))
+
+        series = []
+        for offset in range(days - 1, -1, -1):
+            day_dt = current - timedelta(days=offset)
+            d_key = day_dt.strftime("%Y-%m-%d")
+            series.append({
+                "date": d_key,
+                "label": day_dt.strftime("%d %b"),
+                "value": totals_by_date.get(d_key, 0.0),
+            })
+        return series
 
     def home_metrics(self, reference=None):
         """Menghasilkan metric dashboard hari ini dibandingkan hari kalender sebelumnya."""
@@ -680,11 +1083,18 @@ class POSApp(App):
     def clear_cart(self):
         """Mengosongkan seluruh isi keranjang belanja."""
         self.cart.clear()
+        self.cart_notes.clear()
+        self.voucher_code = ""
+        self.update_nav()
         self.sm.get_screen("cart").render()
 
     def new_order(self):
         """Membuka pesanan baru: kosongkan keranjang lalu arahkan ke menu produk."""
         self.cart.clear()
+        self.cart_notes.clear()
+        self.voucher_code = ""
+        self.order_type = "Dine-In"
+        self.update_nav()
         self.go("products")
 
     # -------------------------------------------------------------------------
@@ -1082,9 +1492,14 @@ class POSApp(App):
 
         try:
             self.customer_name = normalize_customer_label(self.customer_name)
+            discount = self.cart_discount()
+            active_voucher = self.voucher_code if discount > 0 else ""
             receipt = self.db.save_order(
                 self.cart, self.products_by_id, method, total, bayar, kembalian,
                 customer_name=self.customer_name,
+                diskon=discount,
+                kode_voucher=active_voucher,
+                tipe_pesanan=getattr(self, "order_type", "Dine-In"),
             )
             self.refresh_data()
             self.refresh_report()
@@ -1095,10 +1510,19 @@ class POSApp(App):
             self.notice("Transaksi gagal disimpan:\n" + str(error))
             return
 
+        for item in receipt.get("items", []):
+            note_val = self.get_item_note(item.get("id"))
+            if note_val:
+                item["note"] = note_val
+
         # Catat log transaksi kasir (metode, bank debit, total)
         self.log_transaction(receipt, method, bank=bank, extra_info=extra_info)
 
         self.cart.clear()
+        self.cart_notes.clear()
+        self.voucher_code = ""
+        self.order_type = "Dine-In"
+        self.update_nav()
         popup.dismiss()
         if self.user_role() == "pelanggan":
             self.go("products")
@@ -1130,6 +1554,7 @@ class POSApp(App):
             for name_part in customer_name_lines[1:]
         )
 
+        order_type_val = receipt.get("tipe_pesanan", "Dine-In") or "Dine-In"
         lines = [
             sep_double,
             "KOPI NAKO".center(w),
@@ -1140,6 +1565,7 @@ class POSApp(App):
             "Waktu".ljust(15) + f": {receipt['time']}".rjust(w - 15),
             "Kasir".ljust(15) + f": {kasir_name}".rjust(w - 15),
             *customer_lines,
+            "Layanan".ljust(15) + f": {order_type_val}".rjust(w - 15),
             "Metode Bayar".ljust(15) + f": {receipt['payment']}".rjust(w - 15),
             sep_single,
             "ITEM PESANAN".ljust(20) + "SUBTOTAL".rjust(w - 20),
@@ -1152,12 +1578,26 @@ class POSApp(App):
                 name = name[:(w - len(sub_str) - 3)] + ".."
             lines.append(name.ljust(w - len(sub_str)) + sub_str)
             lines.append(f"  {item['qty']} x {rp(item['price'])}".ljust(w))
+            if item.get("note"):
+                lines.append(f"  * {item['note']}"[:w].ljust(w))
 
         bayar_val = receipt.get("bayar", receipt["total"])
         kembalian_val = receipt.get("kembalian", 0)
+        diskon_val = float(receipt.get("diskon", 0) or 0)
+        voucher_val = receipt.get("kode_voucher", "") or ""
+        subtotal_val = float(
+            receipt.get("subtotal", float(receipt["total"]) + diskon_val)
+        )
 
+        lines.append(sep_single)
+        if diskon_val > 0:
+            voucher_tag = f" ({voucher_val})" if voucher_val else ""
+            lines.append("SUBTOTAL".ljust(18) + rp(subtotal_val).rjust(w - 18))
+            lines.append(
+                f"DISKON{voucher_tag}"[:18].ljust(18)
+                + f"-{rp(diskon_val)}".rjust(w - 18)
+            )
         lines.extend([
-            sep_single,
             "TOTAL TAGIHAN".ljust(18) + rp(receipt["total"]).rjust(w - 18),
             "TOTAL BAYAR".ljust(18) + rp(bayar_val).rjust(w - 18),
             "KEMBALIAN".ljust(18) + rp(kembalian_val).rjust(w - 18),
@@ -1238,6 +1678,9 @@ class POSApp(App):
                 "time": order["time"],
                 "payment": order["payment"],
                 "total": order["total"],
+                "diskon": order.get("diskon", 0),
+                "kode_voucher": order.get("kode_voucher", ""),
+                "tipe_pesanan": order.get("tipe_pesanan", "Dine-In"),
                 "customer_name": order.get("customer_name", ""),
                 "bayar": order.get("bayar", order["total"]),
                 "kembalian": order.get("kembalian", 0),
