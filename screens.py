@@ -23,6 +23,8 @@ from kivy.uix.scrollview import ScrollView
 from kivy.uix.screenmanager import Screen
 from kivy.uix.image import Image
 from kivy.uix.textinput import TextInput
+from kivy.uix.behaviors import ButtonBehavior
+from kivy.core.window import Window
 from kivy.uix.spinner import Spinner
 from kivy.utils import platform
 
@@ -37,7 +39,7 @@ from config import (
 from theme import (
     ACCENT, ACCENT_DARK, ACCENT_TEXT, ACCENT_THEMES, BORDER, BORDER_STRONG,
     BROWN, COFFEE, CREAM, CORAL, DANGER_TEXT, GREEN, INPUT, MUTED, ON_ACCENT,
-    PURPLE, SUCCESS_TEXT, SURFACE, TEXT, WARNING_TEXT, WHITE, accent_color,
+    PURPLE, SUCCESS_TEXT, SURFACE, SURFACE_ALT, TEXT, WARNING_TEXT, WHITE, accent_color,
 )
 from ui_components import (
     Text, Card, Page, RevenueTrendChart, button, dashboard_hero_card,
@@ -92,269 +94,299 @@ ACCENT_LABELS = {
 }
 
 
+def _responsive_columns(width, min_card_width, max_columns, spacing):
+    return max(1, min(max_columns, int((width + spacing) / (min_card_width + spacing))))
+
+
+def _configure_responsive_grid(grid, min_card_width, max_columns, spacing):
+    def update_columns(widget, width):
+        widget.cols = _responsive_columns(
+            width, min_card_width, max_columns, spacing
+        )
+
+    grid.bind(width=update_columns)
+    update_columns(grid, grid.width)
+
+
+_BRAND_BG = (0.169, 0.102, 0.071, 1)
+_BRAND_TEXT = (0.965, 0.922, 0.855, 1)
+_BRAND_MUTED = (0.80, 0.735, 0.65, 1)
+
+
+class RoleRow(ButtonBehavior, BoxLayout):
+    """Baris pilihan peran: lencana inisial, judul, deskripsi singkat, dan panah."""
+
+    def __init__(self, title, subtitle, initial, callback, **kwargs):
+        super().__init__(
+            orientation="horizontal", size_hint_y=None, height=dp(68),
+            padding=[dp(14), dp(12), dp(14), dp(12)], spacing=dp(14),
+            **kwargs
+        )
+        self._hover = False
+        with self.canvas.before:
+            self._fill = Color(*SURFACE)
+            self._shape = RoundedRectangle(
+                pos=self.pos, size=self.size, radius=[dp(14)]
+            )
+            self._edge_color = Color(*BORDER)
+            self._edge = Line(
+                rounded_rectangle=(self.x, self.y, self.width, self.height, dp(14)),
+                width=1.1,
+            )
+        self.bind(pos=self._redraw, size=self._redraw, state=self._restyle)
+
+        badge = Card(
+            color=ACCENT, radius=11, size_hint=(None, None),
+            size=(dp(42), dp(42)), pos_hint={"center_y": 0.5},
+        )
+        badge.add_widget(Text(
+            initial, size=18, bold=True, color=ON_ACCENT, align="center",
+        ))
+        self.add_widget(badge)
+
+        texts = BoxLayout(orientation="vertical", spacing=0)
+        texts.add_widget(Text(
+            title, size=15, bold=True, size_hint_y=None, height=dp(22),
+        ))
+        texts.add_widget(Text(
+            subtitle, size=12, color=MUTED, size_hint_y=None, height=dp(18),
+        ))
+        self.add_widget(texts)
+
+        self.add_widget(Text(
+            "\u203a", size=24, color=MUTED, align="center",
+            size_hint=(None, 1), width=dp(18),
+        ))
+        self.bind(on_release=lambda *_: callback() if callback else None)
+
+    def _redraw(self, *_):
+        self._shape.pos = self.pos
+        self._shape.size = self.size
+        self._edge.rounded_rectangle = (
+            self.x, self.y, self.width, self.height, dp(14)
+        )
+
+    def _restyle(self, *_):
+        active = self._hover or self.state == "down"
+        self._fill.rgba = SURFACE_ALT if active else SURFACE
+        self._edge_color.rgba = ACCENT if active else BORDER
+
+    def on_parent(self, _widget, parent):
+        if parent is not None:
+            Window.bind(mouse_pos=self._on_mouse)
+        else:
+            Window.unbind(mouse_pos=self._on_mouse)
+
+    def _on_mouse(self, _window, pos):
+        if self.get_root_window() is None:
+            return
+        inside = self.collide_point(*self.to_widget(*pos))
+        if inside != self._hover:
+            self._hover = inside
+            self._restyle()
+
+
 class LoginPage(Page):
-    """Halaman login mengikuti desain Figma Kopi Nako, dengan autentikasi lama."""
+    """Halaman login dua panel: merek di kiri, pilihan peran di kanan."""
+
+    def _adapt_content_padding(self, _widget, _width):
+        # Halaman login memakai seluruh lebar jendela tanpa padding.
+        self.content.padding = [0, 0, 0, 0]
 
     def on_pre_enter(self, *_):
         self.render()
 
+    def on_leave(self, *_):
+        self._unbind_layout()
+
+    def _unbind_layout(self):
+        sync = getattr(self, "_login_sync", None)
+        if sync is not None:
+            self.unbind(height=sync)
+            self._login_sync = None
+
     def render(self):
+        self._unbind_layout()
         self.content.clear_widgets()
+        self.content.padding = [0, 0, 0, 0]
+        self.content.spacing = 0
 
-        cream = SURFACE
-        espresso = TEXT
-        roast = ACCENT
-        muted = MUTED
-        border = BORDER
-
-        self.content.padding = [dp(12), dp(12), dp(12), dp(24)]
-        self.content.spacing = dp(0)
-
-        # Menjaga desain tetap sempit seperti frame Figma (412 px), dan terpusat
-        # ketika aplikasi dijalankan di desktop. Page tetap dapat di-scroll.
-        outer = AnchorLayout(
-            anchor_x="center", anchor_y="top",
-            size_hint=(1, None), height=dp(900),
-            padding=[dp(0), dp(0), dp(0), dp(0)],
-        )
-        shell = Card(
-            orientation="vertical", size_hint=(None, None),
-            width=dp(412), height=dp(872), padding=dp(0), spacing=dp(0),
-            color=cream, radius=0,
+        outer = BoxLayout(
+            orientation="horizontal", size_hint=(1, None), height=dp(640),
         )
 
-        def fit_shell(instance, *_):
-            shell.width = min(dp(412), max(dp(280), instance.width - dp(8)))
-        outer.bind(width=fit_shell)
-        fit_shell(outer)
-
-        # Banner Figma: foto sebagai background, lalu logo dan branding diletakkan
-        # sebagai layer di atas foto (bukan bagian dari file JPG background).
+        # ---------- Panel kiri: merek ----------
+        brand = FloatLayout(size_hint=(0.46, 1))
         banner_path = ASSETS_DIR / "login_banner.jpg"
-        banner = FloatLayout(size_hint=(1, None), height=dp(205))
-        if banner_path.exists():
-            banner.add_widget(Image(
+        has_photo = banner_path.exists()
+        if has_photo:
+            brand.add_widget(Image(
                 source=str(banner_path), size_hint=(1, 1),
                 pos_hint={"x": 0, "y": 0}, fit_mode="cover",
             ))
+        brand.add_widget(Card(
+            color=tuple(_BRAND_BG[:3]) + (0.80 if has_photo else 1.0,),
+            radius=0, size_hint=(1, 1), pos_hint={"x": 0, "y": 0},
+        ))
 
+        box = BoxLayout(
+            orientation="vertical", size_hint=(1, 1),
+            pos_hint={"x": 0, "y": 0},
+            padding=[dp(48), dp(44), dp(48), dp(40)], spacing=0,
+        )
+        mark = BoxLayout(
+            orientation="horizontal", size_hint_y=None, height=dp(52),
+            spacing=dp(14),
+        )
         if LOGO_PATH.exists():
-            banner.add_widget(Image(
-                source=str(LOGO_PATH), size_hint=(None, None),
-                size=(dp(78), dp(78)), pos_hint={"x": 0.035, "top": 0.92},
-                fit_mode="contain",
-            ))
-        banner.add_widget(Text(
-            "KOPI\nNAKO", size=30, bold=True, color=TEXT,
-            size_hint=(0.55, None), height=dp(76),
-            pos_hint={"x": 0.275, "top": 0.91},
+            tile = Card(
+                color=(1, 1, 1, 1), radius=12, size_hint=(None, None),
+                size=(dp(52), dp(52)), padding=dp(5),
+            )
+            tile.add_widget(Image(source=str(LOGO_PATH), fit_mode="contain"))
+            mark.add_widget(tile)
+        mark.add_widget(Text(
+            "Kopi Nako", size=22, bold=True, color=_BRAND_TEXT,
         ))
-        banner.add_widget(Text(
-            "A good coffee.\nA better day.", size=25, bold=True,
-            color=TEXT, size_hint=(0.67, None),
-            height=dp(30), pos_hint={"x": 0.035, "top": 0.44},
-        ))
-        banner.add_widget(Text(
-            "AUTHENTIC COFFEE EXPERIENCE", size=15, bold=True,
-            color=ACCENT_TEXT, size_hint=(0.60, None),
-            height=dp(14), pos_hint={"x": 0.035, "top": 0.17},
-        ))
-        shell.add_widget(banner)
+        box.add_widget(mark)
+        box.add_widget(BoxLayout())
 
-        # Slot form memenuhi tinggi body desain. Isi form sendiri dipasang di
-        # bagian atas supaya tidak muncul ruang kosong besar sebelum judul.
-        form_slot = AnchorLayout(
-            anchor_x="center", anchor_y="top", size_hint=(1, None), height=dp(667)
+        tagline = Text(
+            "Kopi enak,\nsuasana nyaman.", size=38, bold=True,
+            color=_BRAND_TEXT, size_hint_y=None, height=dp(104),
+        )
+        box.add_widget(tagline)
+        gap = BoxLayout(size_hint_y=None, height=dp(16))
+        box.add_widget(gap)
+        sub = Text(
+            "Catat pesanan, kelola stok, dan tutup hari dengan rapi.",
+            size=14, color=_BRAND_MUTED, size_hint_y=None, height=dp(48),
+        )
+        box.add_widget(sub)
+        box.add_widget(BoxLayout())
+        footer = Text(
+            "POS Kopi Nako", size=12, color=_BRAND_MUTED,
+            size_hint_y=None, height=dp(20),
+        )
+        box.add_widget(footer)
+        brand.add_widget(box)
+
+        # ---------- Panel kanan: pilihan peran ----------
+        entry = AnchorLayout(
+            anchor_x="center", anchor_y="center", size_hint=(0.54, 1),
+            padding=[dp(24), dp(24), dp(24), dp(24)],
         )
         form = BoxLayout(
-            orientation="vertical", size_hint=(1, None), height=dp(566),
-            padding=[dp(28), dp(24), dp(28), dp(18)], spacing=dp(0),
+            orientation="vertical", size_hint=(None, None),
+            width=dp(400), height=dp(520),
         )
-        form.canvas.before.clear()
-        with form.canvas.before:
-            Color(*cream)
-            form_bg = RoundedRectangle(pos=form.pos, size=form.size, radius=[0])
-        def update_form_bg(*_):
-            form_bg.pos = form.pos
-            form_bg.size = form.size
-        form.bind(pos=update_form_bg, size=update_form_bg)
+
+        def space(height):
+            return BoxLayout(size_hint_y=None, height=dp(height))
+
+        def open_role(role):
+            return lambda: self.manager.app.open_login_dialog(role)
 
         form.add_widget(Text(
-            "Log in to the POS system", size=22, bold=True, color=espresso,
-            size_hint_y=None, height=dp(32),
+            "Selamat datang", size=28, bold=True,
+            size_hint_y=None, height=dp(40),
         ))
         form.add_widget(Text(
-            "Good coffee. Even better to see you.", size=13, color=muted,
-            size_hint_y=None, height=dp(30),
+            "Pilih peran Anda untuk masuk ke aplikasi.",
+            size=13, color=MUTED, size_hint_y=None, height=dp(24),
         ))
-        form.add_widget(BoxLayout(size_hint_y=None, height=dp(12)))
+        form.add_widget(space(24))
 
-        def input_field(hint, password=False):
-            """Input dengan latar cream dan border membulat ala desain Figma."""
-            wrap = BoxLayout(
-                orientation="horizontal", size_hint=(1, None), height=dp(58),
-                padding=[dp(13), dp(3), dp(10), dp(3)],
-            )
-            with wrap.canvas.before:
-                Color(*INPUT)
-                shape = RoundedRectangle(pos=wrap.pos, size=wrap.size, radius=[dp(13)])
-                Color(*border)
-                outline = Line(rounded_rectangle=(wrap.x, wrap.y, wrap.width, wrap.height, dp(13)), width=1.0)
-            def update_wrap(*_):
-                shape.pos = wrap.pos
-                shape.size = wrap.size
-                outline.rounded_rectangle = (wrap.x, wrap.y, wrap.width, wrap.height, dp(13))
-            wrap.bind(pos=update_wrap, size=update_wrap)
-
-            field = TextInput(
-                hint_text=hint, password=password, multiline=False,
-                size_hint=(1, 1), font_size=dp(14),
-                padding=[dp(2), dp(13), dp(2), dp(10)],
-                background_normal="", background_active="",
-                background_color=(0, 0, 0, 0), foreground_color=TEXT,
-                cursor_color=ACCENT, hint_text_color=MUTED,
-            )
-            wrap.add_widget(field)
-            if password:
-                # Kontrol SHOW/HIDE memakai teks ASCII agar tidak muncul glyph kotak
-                # ketika font sistem tidak punya ikon mata.
-                toggle = Button(
-                    text="SHOW", size_hint=(None, 1), width=dp(44),
-                    font_size=dp(8), bold=True, color=muted,
-                    background_normal="", background_down="",
-                    background_color=(0, 0, 0, 0),
-                )
-                def toggle_password(*_):
-                    field.password = not field.password
-                    toggle.text = "SHOW" if field.password else "HIDE"
-                toggle.bind(on_release=toggle_password)
-                wrap.add_widget(toggle)
-            return wrap, field
-
-        self.username_input = None
-        self.password_input = None
-
-        user_label = Text("Username", size=11, bold=True, color=muted,
-                          size_hint_y=None, height=dp(20))
-        form.add_widget(user_label)
-        user_wrap, self.username_input = input_field("Enter the cashier's username")
-        self.username_input.bind(
-            on_text_validate=lambda *_: setattr(self.password_input, "focus", True)
-        )
-        form.add_widget(user_wrap)
-        form.add_widget(BoxLayout(size_hint_y=None, height=dp(12)))
-
-        pass_label = Text("Password", size=11, bold=True, color=muted,
-                          size_hint_y=None, height=dp(20))
-        form.add_widget(pass_label)
-        pass_wrap, self.password_input = input_field("Enter your password", password=True)
-        self.password_input.bind(on_text_validate=lambda *_: self.submit())
-        form.add_widget(pass_wrap)
-        form.add_widget(BoxLayout(size_hint_y=None, height=dp(2)))
-
-        # Tombol utama dibuat dengan RoundedRectangle langsung agar radius tampil
-        # konsisten. Label tanpa panah khusus menghindari kotak glyph di macOS.
-        sign_in = Button(
-            text="Sign in", size_hint=(1, None), height=dp(50),
-            font_size=dp(14), bold=True, color=ON_ACCENT,
-            background_normal="", background_down="",
-            background_color=(0, 0, 0, 0),
-        )
-        with sign_in.canvas.before:
-            sign_in_bg_color = Color(*ACCENT)
-            sign_in_bg_shape = RoundedRectangle(
-                pos=sign_in.pos, size=sign_in.size, radius=[dp(26)]
-            )
-        def update_sign_in_shape(*_):
-            sign_in_bg_shape.pos = sign_in.pos
-            sign_in_bg_shape.size = sign_in.size
-        sign_in.bind(pos=update_sign_in_shape, size=update_sign_in_shape)
-        sign_in.bind(on_release=lambda *_: self.submit())
-        form.add_widget(sign_in)
-        form.add_widget(BoxLayout(size_hint_y=None, height=dp(14)))
-
-        # Pemisah "or continue with".
-        divider_row = BoxLayout(
-            orientation="horizontal", size_hint_y=None, height=dp(22), spacing=dp(10)
-        )
-        for _ in range(1):
-            left_line = BoxLayout(size_hint_y=None, height=dp(1))
-            with left_line.canvas.before:
-                Color(*border)
-                left_shape = RoundedRectangle(pos=left_line.pos, size=left_line.size)
-            left_line.bind(pos=lambda w, *_: setattr(left_shape, 'pos', w.pos),
-                           size=lambda w, *_: setattr(left_shape, 'size', w.size))
-            divider_row.add_widget(left_line)
-        divider_row.add_widget(Text("or continue with", size=10, color=muted,
-                                    size_hint_x=None, width=dp(98), align="center"))
-        right_line = BoxLayout(size_hint_y=None, height=dp(1))
-        with right_line.canvas.before:
-            Color(*border)
-            right_shape = RoundedRectangle(pos=right_line.pos, size=right_line.size)
-        right_line.bind(pos=lambda w, *_: setattr(right_shape, 'pos', w.pos),
-                        size=lambda w, *_: setattr(right_shape, 'size', w.size))
-        divider_row.add_widget(right_line)
-        form.add_widget(divider_row)
-        form.add_widget(BoxLayout(size_hint_y=None, height=dp(10)))
-
-        demo_row = GridLayout(
-            cols=2, size_hint_y=None, height=dp(44), spacing=dp(8)
-        )
-        demo_admin_btn = button(
-            "Demo Admin",
-            lambda: self.fill_demo_credentials("admin", "KopiNako123!"),
-            False, 44, outline=True, outline_color=border,
-        )
-        demo_admin_btn.font_size = dp(12)
-        demo_admin_btn.color = TEXT
-        demo_kasir_btn = button(
-            "Demo Kasir",
-            lambda: self.fill_demo_credentials("kasir", "KasirNako123!"),
-            False, 44, outline=True, outline_color=border,
-        )
-        demo_kasir_btn.font_size = dp(12)
-        demo_kasir_btn.color = TEXT
-        demo_row.add_widget(demo_admin_btn)
-        demo_row.add_widget(demo_kasir_btn)
-        form.add_widget(demo_row)
-        form.add_widget(BoxLayout(size_hint_y=None, height=dp(8)))
-
-        self_order_btn = button(
-            "PESAN MANDIRI (MODE PELANGGAN)",
-            lambda: self.manager.app.login_as_customer(),
-            True, 48,
-        )
-        form.add_widget(self_order_btn)
-
-        form.add_widget(BoxLayout(size_hint_y=None, height=dp(20)))
         form.add_widget(Text(
-            "POS KOPI NAKO - POINT OF SALE", size=11, color=muted,
-            align="center", size_hint_y=None, height=dp(22),
+            "Tim Kopi Nako", size=12, bold=True, color=MUTED,
+            size_hint_y=None, height=dp(22),
         ))
-        form.add_widget(BoxLayout(size_hint_y=None, height=dp(10)))
-        form.add_widget(Text(
-            "POS Kopi Nako v2.0  •  Keamanan PBKDF2-HMAC-SHA256  •  SQLite & MySQL Support",
-            size=8, color=muted, align="center", size_hint_y=None, height=dp(32),
+        form.add_widget(space(8))
+        form.add_widget(RoleRow(
+            "Admin", "Kelola menu, stok, dan laporan", "A",
+            open_role("admin"),
         ))
+        form.add_widget(space(10))
+        form.add_widget(RoleRow(
+            "Kasir", "Terima pesanan dan pembayaran", "K",
+            open_role("kasir"),
+        ))
+        form.add_widget(space(20))
+        form.add_widget(Card(
+            color=BORDER, radius=0, size_hint_y=None, height=dp(1),
+        ))
+        form.add_widget(space(20))
 
-        form_slot.add_widget(form)
-        shell.add_widget(form_slot)
-        outer.add_widget(shell)
+        form.add_widget(Text(
+            "Pelanggan", size=12, bold=True, color=MUTED,
+            size_hint_y=None, height=dp(22),
+        ))
+        form.add_widget(space(8))
+        form.add_widget(RoleRow(
+            "Pelanggan", "Pesan dan lihat riwayat belanja", "P",
+            open_role("pelanggan"),
+        ))
+        form.add_widget(space(14))
+        form.add_widget(Text(
+            "Belum punya akun?", size=12, color=MUTED, align="center",
+            size_hint_y=None, height=dp(20),
+        ))
+        register_btn = button(
+            "Daftar sebagai pelanggan",
+            lambda: self.manager.app.open_customer_registration(),
+            False, 38, fill_color=(0, 0, 0, 0), text_color=ACCENT_TEXT,
+        )
+        register_btn.font_size = dp(13)
+        form.add_widget(register_btn)
+        form.add_widget(BoxLayout())
+        form.add_widget(Text(
+            "POS Kopi Nako \u00b7 Point of Sale", size=11, color=MUTED,
+            align="center", size_hint_y=None, height=dp(18),
+        ))
+        entry.add_widget(form)
+
+        def fit_form(_widget, width):
+            form.width = min(dp(400), max(dp(260), width - dp(48)))
+        entry.bind(width=fit_form)
+        fit_form(entry, entry.width)
+
+        outer.add_widget(brand)
+        outer.add_widget(entry)
         self.content.add_widget(outer)
 
-    def fill_demo_credentials(self, username="admin", password="KopiNako123!"):
-        """Mengisi formulir login dengan kredensial demo secara instan."""
-        if hasattr(self, "username_input") and self.username_input is not None:
-            self.username_input.text = username
-        if hasattr(self, "password_input") and self.password_input is not None:
-            self.password_input.text = password
+        def sync(*_):
+            wide = outer.width >= dp(820)
+            if wide:
+                outer.orientation = "horizontal"
+                outer.height = max(dp(620), self.height)
+                brand.size_hint = (0.46, 1)
+                entry.size_hint = (0.54, 1)
+                box.padding = [dp(48), dp(44), dp(48), dp(40)]
+                tagline.font_size = dp(38)
+                tagline.height = dp(104)
+                gap.height = dp(16)
+                sub.height = dp(48)
+                footer.height = dp(20)
+                sub.opacity = footer.opacity = 1
+            else:
+                outer.orientation = "vertical"
+                brand.size_hint = (1, None)
+                brand.height = dp(200)
+                entry.size_hint = (1, None)
+                entry.height = dp(560)
+                outer.height = brand.height + entry.height
+                box.padding = [dp(24), dp(20), dp(24), dp(20)]
+                tagline.font_size = dp(22)
+                tagline.height = dp(60)
+                gap.height = 0
+                sub.height = 0
+                footer.height = 0
+                sub.opacity = footer.opacity = 0
 
-    def submit(self):
-        """Mengirimkan kredensial login ke pengendali aplikasi."""
-        app = self.manager.app
-        uname = self.username_input.text if getattr(self, "username_input", None) else ""
-        passwd = self.password_input.text if getattr(self, "password_input", None) else ""
-        app.login(uname, passwd)
+        self._login_sync = sync
+        self.bind(height=sync)
+        outer.bind(width=sync)
+        sync()
 
 
 class Home(Page):
@@ -391,14 +423,16 @@ class Home(Page):
         else:
             subtitle_text = "Ringkasan aktivitas bisnis Anda"
 
-        title_box.add_widget(Text(
+        dashboard_title = Text(
             "Dashboard", size=22, bold=True, color=COFFEE,
             size_hint_y=None, height=dp(30),
-        ))
-        title_box.add_widget(Text(
+        )
+        title_box.add_widget(dashboard_title)
+        dashboard_subtitle = Text(
             subtitle_text, size=12, color=MUTED,
             size_hint_y=None, height=dp(20),
-        ))
+        )
+        title_box.add_widget(dashboard_subtitle)
         top_header.add_widget(title_box)
 
         self.clock_time = Text(
@@ -431,6 +465,25 @@ class Home(Page):
         cta_btn.size_hint_x = None
         cta_btn.width = dp(168)
         top_header.add_widget(cta_btn)
+
+        def adapt_dashboard_header(_widget, width):
+            narrow = width < dp(620)
+            top_header.spacing = dp(6 if narrow else 12)
+            self.clock_time.width = dp(48 if narrow else 58)
+            self.clock_date.width = dp(0 if narrow else 85)
+            self.clock_date.opacity = 0 if narrow else 1
+            cta_btn.width = dp(112 if narrow else 168)
+            dashboard_title.font_size = dp(18 if narrow else 22)
+            dashboard_subtitle.font_size = dp(9 if narrow else 12)
+            dashboard_subtitle.height = dp(16 if narrow else 20)
+            dashboard_subtitle.text = (
+                "Panel Administrator" if role_kasir == "admin"
+                else "Terminal Kasir" if role_kasir == "kasir"
+                else "Ringkasan"
+            ) if narrow else subtitle_text
+
+        top_header.bind(width=adapt_dashboard_header)
+        adapt_dashboard_header(top_header, top_header.width)
         main_layout.add_widget(top_header)
 
         # 2. Baris 1: 4 Kartu Metrik Berwarna Solid Sejajar (Royal Blue, Emerald, Violet, Amber)
@@ -443,8 +496,10 @@ class Home(Page):
         target_pct = int(round(target_ratio * 100))
 
         hero_grid = GridLayout(
-            cols=4, spacing=dp(14), size_hint_y=None, height=dp(132)
+            cols=4, spacing=dp(14), size_hint_y=None,
         )
+        hero_grid.bind(minimum_height=hero_grid.setter("height"))
+        _configure_responsive_grid(hero_grid, dp(210), 4, dp(14))
         if role_kasir == "kasir":
             first_hero = dashboard_hero_card(
                 "Item di Keranjang",
@@ -491,8 +546,10 @@ class Home(Page):
         categories_count = len({p.get("category") for p in app.products}) or 3
         low_stock_items = [p for p in app.products if int(p["stok"]) < 15]
         mini_grid = GridLayout(
-            cols=4, spacing=dp(14), size_hint_y=None, height=dp(82)
+            cols=4, spacing=dp(14), size_hint_y=None,
         )
+        mini_grid.bind(minimum_height=mini_grid.setter("height"))
+        _configure_responsive_grid(mini_grid, dp(210), 4, dp(14))
         mini_grid.add_widget(dashboard_mini_card(
             "Total Kategori", categories_count, icon_text="::", border_color=BORDER
         ))
@@ -540,6 +597,16 @@ class Home(Page):
             restock_btn.size_hint_x = None
             restock_btn.width = dp(120)
             low_stock_card.add_widget(restock_btn)
+
+            def adapt_low_stock_alert(_widget, width):
+                narrow = width < dp(520)
+                low_stock_card.height = dp(72 if narrow else 62)
+                restock_btn.width = dp(0 if narrow else 120)
+                restock_btn.opacity = 0 if narrow else 1
+                restock_btn.disabled = narrow
+
+            low_stock_card.bind(width=adapt_low_stock_alert)
+            adapt_low_stock_alert(low_stock_card, low_stock_card.width)
             main_layout.add_widget(low_stock_card)
 
         # 4. Baris 3: Kartu Grafik Tren Pendapatan (Persis Gambar Referensi)
@@ -591,6 +658,17 @@ class Home(Page):
         btn_right.width = dp(155)
         chart_header.add_widget(btn_left)
         chart_header.add_widget(btn_right)
+
+        def adapt_chart_header(_widget, width):
+            narrow = width < dp(660)
+            for action_button in (btn_left, btn_right):
+                action_button.width = dp(0 if narrow else 150)
+                action_button.opacity = 0 if narrow else 1
+                action_button.disabled = narrow
+            chart_header.spacing = dp(6 if narrow else 10)
+
+        chart_header.bind(width=adapt_chart_header)
+        adapt_chart_header(chart_header, chart_header.width)
         chart_card.add_widget(chart_header)
 
         chart_card.add_widget(RevenueTrendChart(app.revenue_trend_series(days=7)))
@@ -736,7 +814,7 @@ class ProductsPage(Page):
             )
             self.content.add_widget(add_product_button)
 
-        if perms["can_manage_stock"]:
+        if role == "admin" and perms["can_manage_stock"]:
             stock_action = Card(
                 orientation="horizontal", size_hint_y=None, height=dp(58),
                 padding=[dp(14), dp(8), dp(14), dp(8)], spacing=dp(8),
@@ -822,7 +900,9 @@ class ProductsPage(Page):
 
         # Baris Filter Kategori Modern (Pills / Chips)
         filter_box = BoxLayout(orientation="horizontal", size_hint_y=None, height=dp(44), spacing=dp(8))
-        for cat in ["Semua", "Kopi", "Non Kopi", "Makanan"]:
+        categories = ["Kopi", "Non Kopi", "Makanan"]
+        categories.append("Best Seller")
+        for cat in categories:
             is_active = self.category == cat
             btn = button(
                 cat,
@@ -837,6 +917,7 @@ class ProductsPage(Page):
         # Wadah Grid Produk
         self.grid = GridLayout(cols=2, spacing=dp(12), size_hint_y=None)
         self.grid.bind(minimum_height=self.grid.setter("height"))
+        _configure_responsive_grid(self.grid, dp(390), 2, dp(12))
         self.content.add_widget(self.grid)
         self.render_products()
 
@@ -1316,7 +1397,10 @@ class ProductsPage(Page):
         self.render_products()
 
     def set_category(self, category):
-        self.category = category
+        if self.category == category:
+            self.category = "Semua"
+        else:
+            self.category = category
         self.render()
 
     def reset_search(self):
@@ -1335,7 +1419,10 @@ class ProductsPage(Page):
 
         matched_products = []
         for product in app.products:
-            if self.category != "Semua" and product["category"] != self.category:
+            if self.category == "Best Seller":
+                if product["name"] not in BEST_SELLER_PRODUCTS:
+                    continue
+            elif self.category != "Semua" and product["category"] != self.category:
                 continue
             if self.query.lower() not in product["name"].lower():
                 continue
@@ -1364,6 +1451,8 @@ class ProductsPage(Page):
             stok = int(product["stok"])
             qty_in_cart = app.cart.get(pid, 0)
             is_out_of_stock = stok <= 0
+            can_customize = product.get("category") in ("Kopi", "Non Kopi")
+            image_width = dp(92 if self.grid.width < dp(480) else 120)
 
             card = Card(
                 orientation="horizontal", padding=dp(12),
@@ -1381,13 +1470,13 @@ class ProductsPage(Page):
             if image_path is not None and image_path.exists():
                 photo = Image(
                     source=str(image_path),
-                    size_hint=(None, 1), width=dp(120),
+                    size_hint=(None, 1), width=image_width,
                     fit_mode="contain"
                 )
                 card.add_widget(photo)
             else:
                 art = Card(
-                    size_hint=(None, 1), width=dp(120),
+                    size_hint=(None, 1), width=image_width,
                     color=ART_BY_CATEGORY.get(product["category"], ACCENT)
                 )
                 art.add_widget(Text(
@@ -1450,7 +1539,7 @@ class ProductsPage(Page):
             ))
 
             # Harga Produk Tegas (+ indikator racikan bila sudah diatur)
-            custom_note = app.get_item_note(pid)
+            custom_note = app.get_item_note(pid) if can_customize else ""
             price_line = (
                 f"{rp(product['price'])}  •  {custom_note}"
                 if custom_note
@@ -1505,12 +1594,13 @@ class ProductsPage(Page):
                 btn_plus.width = dp(42)
                 action_row.add_widget(btn_plus)
 
-                btn_custom = button(
-                    "RACIK",
-                    lambda p=product: self.open_customize_item(p),
-                    False, 44, outline=True, outline_color=ACCENT
-                )
-                action_row.add_widget(btn_custom)
+                if can_customize:
+                    btn_custom = button(
+                        "RACIK",
+                        lambda p=product: self.open_customize_item(p),
+                        False, 44, outline=True, outline_color=ACCENT
+                    )
+                    action_row.add_widget(btn_custom)
             else:
                 add_label_text = "PESAN +" if role == "pelanggan" else "TAMBAH +"
                 btn_add = button(
@@ -1651,6 +1741,9 @@ class ProductsPage(Page):
     def open_customize_item(self, product):
         """Membuka modal pilihan Level Gula, Level Es, dan Catatan Barista."""
         app = self.manager.app
+        if product.get("category") not in ("Kopi", "Non Kopi"):
+            app.notice("Racikan hanya tersedia untuk kategori minuman.")
+            return
         pid = product["id"]
         is_drink = product.get("category") in ("Kopi", "Non Kopi")
         selected = {
@@ -1783,7 +1876,16 @@ class CartPage(Page):
             return
 
         # 1. Grid 2 Kolom Sejajar Horizontal: Form Data Transaksi (Kiri) & Hero Component Total (Kanan)
-        grid_top = GridLayout(cols=2, spacing=dp(12), size_hint=(1, None), height=dp(140))
+        grid_top = GridLayout(
+            cols=2, spacing=dp(12), size_hint=(1, None), height=dp(140)
+        )
+
+        def adapt_summary_grid(grid, width):
+            grid.cols = _responsive_columns(width, dp(300), 2, dp(12))
+            grid.height = dp(140 if grid.cols == 2 else 292)
+
+        grid_top.bind(width=adapt_summary_grid)
+        adapt_summary_grid(grid_top, grid_top.width)
 
         # Panel Kiri: Tanggal & Nama Pelanggan / No. Meja
         left_box = Card(
@@ -1911,6 +2013,7 @@ class CartPage(Page):
         apply_voucher_btn.width = dp(140)
         voucher_row.add_widget(apply_voucher_btn)
 
+        reset_voucher_btn = None
         if getattr(app, "voucher_code", ""):
             reset_voucher_btn = button(
                 "HAPUS",
@@ -1921,6 +2024,17 @@ class CartPage(Page):
             reset_voucher_btn.width = dp(86)
             voucher_row.add_widget(reset_voucher_btn)
 
+        def adapt_promo_card(_widget, width):
+            narrow = width < dp(540)
+            type_row.cols = 1 if narrow else 2
+            type_row.height = dp(88 if narrow else 40)
+            promo_card.height = dp(164 if narrow else 116)
+            apply_voucher_btn.width = dp(110 if width < dp(500) else 140)
+            if reset_voucher_btn is not None:
+                reset_voucher_btn.width = dp(68 if width < dp(500) else 86)
+
+        promo_card.bind(width=adapt_promo_card)
+        adapt_promo_card(promo_card, promo_card.width)
         promo_card.add_widget(voucher_row)
         self.content.add_widget(promo_card)
 
@@ -1930,6 +2044,7 @@ class CartPage(Page):
         # 2. List Item Keranjang dengan Counter Ringkas & Info Racikan
         for pid, qty in list(app.cart.items()):
             product = app.products_by_id[pid]
+            can_customize = product.get("category") in ("Kopi", "Non Kopi")
             item_note = app.get_item_note(pid)
             row = Card(
                 orientation="horizontal", padding=dp(12),
@@ -1947,14 +2062,20 @@ class CartPage(Page):
             ))
             row.add_widget(info)
 
-            custom_btn = button(
-                "RACIK",
-                lambda p=product: app.sm.get_screen("products").open_customize_item(p),
-                False, 44, outline=True, outline_color=ACCENT
+            controls_row = BoxLayout(
+                orientation="horizontal", spacing=dp(4),
+                size_hint=(None, 1),
+                width=dp(284 if can_customize else 206),
             )
-            custom_btn.size_hint_x = None
-            custom_btn.width = dp(74)
-            row.add_widget(custom_btn)
+            if can_customize:
+                custom_btn = button(
+                    "RACIK",
+                    lambda p=product: app.sm.get_screen("products").open_customize_item(p),
+                    False, 44, outline=True, outline_color=ACCENT
+                )
+                custom_btn.size_hint_x = None
+                custom_btn.width = dp(74)
+                controls_row.add_widget(custom_btn)
 
             # Tombol counter - [qty] +
             btn_sub = button(
@@ -1964,7 +2085,7 @@ class CartPage(Page):
             )
             btn_sub.size_hint_x = None
             btn_sub.width = dp(44)
-            row.add_widget(btn_sub)
+            controls_row.add_widget(btn_sub)
 
             qty_input = text_input(
                 text=str(qty), height=44, font_size=13,
@@ -1977,12 +2098,12 @@ class CartPage(Page):
                 app.set_qty(product_id, field.text)
 
             qty_input.bind(on_text_validate=apply_qty)
-            row.add_widget(qty_input)
+            controls_row.add_widget(qty_input)
 
             apply_button = button("OK", apply_qty, False, 44)
             apply_button.size_hint_x = None
             apply_button.width = dp(46)
-            row.add_widget(apply_button)
+            controls_row.add_widget(apply_button)
 
             btn_add = button(
                 "+",
@@ -1991,7 +2112,21 @@ class CartPage(Page):
             )
             btn_add.size_hint_x = None
             btn_add.width = dp(44)
-            row.add_widget(btn_add)
+            controls_row.add_widget(btn_add)
+
+            def adapt_cart_item(_widget, width, item_row=row, item_info=info, controls=controls_row):
+                narrow = width < dp(620)
+                item_row.orientation = "vertical" if narrow else "horizontal"
+                item_row.height = dp(132 if narrow else 88)
+                item_info.size_hint_y = None if narrow else 1
+                item_info.height = dp(48 if narrow else 0)
+                controls.size_hint_x = 1 if narrow else None
+                controls.size_hint_y = None if narrow else 1
+                controls.height = dp(44)
+
+            row.bind(width=adapt_cart_item)
+            adapt_cart_item(row, row.width)
+            row.add_widget(controls_row)
 
             self.content.add_widget(row)
 
@@ -2015,6 +2150,13 @@ class CartPage(Page):
                 f"Total Bayar: {rp(app.cart_total())}",
                 size=13, bold=True, color=ACCENT_TEXT, align="right",
             ))
+            def adapt_discount_bar(widget, width):
+                narrow = width < dp(520)
+                widget.orientation = "vertical" if narrow else "horizontal"
+                widget.height = dp(74 if narrow else 46)
+
+            discount_bar.bind(width=adapt_discount_bar)
+            adapt_discount_bar(discount_bar, discount_bar.width)
             self.content.add_widget(discount_bar)
 
         # 3. Tombol Aksi Kasir / Pelanggan
@@ -2087,6 +2229,14 @@ class ReportsPage(Page):
         filter_row = GridLayout(
             cols=4, spacing=dp(8), size_hint_y=None, height=dp(44)
         )
+        def adapt_report_filter(_widget, width):
+            narrow = width < dp(620)
+            filter_row.cols = 2 if narrow else 4
+            filter_row.height = dp(96 if narrow else 44)
+            filter_card.height = dp(148 if narrow else 96)
+
+        filter_card.bind(width=adapt_report_filter)
+        adapt_report_filter(filter_card, filter_card.width)
         for period, label in REPORT_PERIODS:
             is_active = active_period == period
             filter_row.add_widget(button(
@@ -2098,16 +2248,6 @@ class ReportsPage(Page):
             ))
         filter_card.add_widget(filter_row)
         self.content.add_widget(filter_card)
-
-        export_row = BoxLayout(
-            orientation="horizontal", size_hint_y=None, height=dp(42), spacing=dp(8)
-        )
-        export_row.add_widget(button(
-            "EKSPOR LAPORAN CSV / EXCEL",
-            app.export_report_csv,
-            True, 42
-        ))
-        self.content.add_widget(export_row)
 
         top_products = list(getattr(app, "report_top_products", []))
         if top_products:
@@ -2186,19 +2326,36 @@ class ReportsPage(Page):
             
             # Baris Atas: ID Nota, Waktu, dan Badge Chip Metode Bayar
             top_row = BoxLayout(orientation="horizontal", size_hint_y=None, height=dp(22), spacing=dp(8))
-            top_row.add_widget(Text(
+            order_id = Text(
                 f"{order['id']}", size=13, bold=True, color=COFFEE,
                 size_hint_x=None, width=dp(80)
-            ))
-            top_row.add_widget(Text(
+            )
+            order_date = Text(
                 f"{order['date']}  {order['time']}", size=11, color=MUTED,
                 size_hint_x=None, width=dp(138)
-            ))
+            )
+            top_row.add_widget(order_id)
+            top_row.add_widget(order_date)
             top_row.add_widget(BoxLayout()) # spacer
 
             pm = order.get("payment", "-")
             chip_color = ACCENT if "E-Wallet" in pm else (GREEN if "Tunai" in pm else PURPLE)
-            top_row.add_widget(status_chip(pm, chip_color, width=130, height=28))
+            payment_chip = status_chip(pm, chip_color, width=130, height=28)
+            top_row.add_widget(payment_chip)
+
+            def adapt_order_header(_widget, width):
+                if width < dp(520):
+                    available = width - dp(32)
+                    order_id.width = dp(56)
+                    order_date.width = max(dp(82), available * 0.36)
+                    payment_chip.width = max(dp(90), available * 0.32)
+                else:
+                    order_id.width = dp(80)
+                    order_date.width = dp(138)
+                    payment_chip.width = dp(130)
+
+            top_row.bind(width=adapt_order_header)
+            adapt_order_header(top_row, top_row.width)
             row.add_widget(top_row)
 
             # Baris Bawah: Total Belanja, Tipe Layanan, Voucher, & Info Kembalian

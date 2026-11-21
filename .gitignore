@@ -1,5 +1,32 @@
+# Python & Cache
 __pycache__/
-*.py[cod]
-*$py.class
+*.pyc
+*.pyo
+*.pyd
+
+# Database lokal
+*.db
+*.sqlite3
+
+# Virtual Environments
+.venv/
+.venv*/
+env/
+venv/
+ENV/
+
+# Editor & IDE
+.vscode/
+.idea/
 .env
 
+# Catatan Rekap Pribadi (Disimpan lokal saja)
+REKAP_*.md
+
+# AI Agent, Claude, dan Skill files (Jangan masuk ke Git)
+.agents/
+.claude/
+.gemini/
+skills-lock.json.DS_Store
+
+.DS_Store

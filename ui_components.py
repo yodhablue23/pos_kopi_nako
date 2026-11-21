@@ -5,6 +5,7 @@ agar tampilan aplikasi rapi, konsisten, dan mudah digunakan kembali oleh seluruh
 """
 from kivy.metrics import dp
 from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.gridlayout import GridLayout
 from kivy.uix.scrollview import ScrollView
 from kivy.uix.screenmanager import Screen
 from kivy.uix.label import Label
@@ -14,7 +15,7 @@ from kivy.uix.popup import Popup
 from kivy.graphics import Color, RoundedRectangle, Line, Ellipse
 from kivy.uix.image import Image
 
-from config import LOGO_PATH
+from config import ASSETS_DIR, LOGO_PATH
 from theme import (
     ACCENT, BUTTON_STYLES, COFFEE, CORAL, INPUT, MUTED, ON_ACCENT,
     SURFACE, TEXT, WHITE,
@@ -269,18 +270,25 @@ def payment_field(
 
 
 def payment_brand_badges():
-    """Menampilkan badge teks provider kartu saat aset logo resmi belum tersedia."""
-    badges = BoxLayout(
-        orientation="horizontal", spacing=dp(4), size_hint=(None, 1), width=dp(158),
+    """Menampilkan logo bank yang tersedia untuk pembayaran kartu."""
+    badges = GridLayout(
+        cols=2, spacing=[dp(4), dp(3)],
+        size_hint=(None, 1), width=dp(158),
     )
-    for name in ("VISA", "MC", "BCA", "MANDIRI"):
+    bank_logos = (
+        "Bank_Central_Asia.svg.webp",
+        "Bank_Mandiri_logo_2016.svg.webp",
+        "BANK_BRI_logo.svg.webp",
+        "Bank_Negara_Indonesia_logo_(2004).svg.webp",
+    )
+    for logo_name in bank_logos:
         badge = Card(
-            orientation="vertical", size_hint=(None, 1),
-            width=dp(31 if len(name) <= 3 else 52),
-            padding=[dp(2), 0, dp(2), 0], color=PAYMENT_SURFACE, radius=6,
+            orientation="vertical", padding=dp(3),
+            color=WHITE, radius=6,
         )
-        badge.add_widget(Text(
-            name, size=8, bold=True, color=PAYMENT_MUTED, align="center",
+        badge.add_widget(Image(
+            source=str(ASSETS_DIR / logo_name),
+            fit_mode="contain",
         ))
         badges.add_widget(badge)
     return badges
@@ -455,7 +463,12 @@ class Page(Screen):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.scroll = ScrollView(
-            size_hint=(1, 1), do_scroll_x=False, bar_width=dp(5)
+            size_hint=(1, 1),
+            do_scroll_x=False,
+            scroll_type=["bars", "content"],
+            bar_width=dp(7),
+            bar_color=ACCENT,
+            bar_inactive_color=tuple(ACCENT[:3]) + (0.35,),
         )
         # Content box adalah wadah tempat widget halaman ditempatkan
         self.content = BoxLayout(
@@ -468,6 +481,13 @@ class Page(Screen):
         self.content.bind(minimum_height=self.content.setter("height"))
         self.scroll.add_widget(self.content)
         self.add_widget(self.scroll)
+        self.bind(width=self._adapt_content_padding)
+
+    def _adapt_content_padding(self, _widget, width):
+        horizontal_padding = dp(12 if width < dp(520) else 22)
+        self.content.padding = [
+            horizontal_padding, dp(16), horizontal_padding, dp(20)
+        ]
 
     def heading(self, title, subtitle):
         """Menambahkan bagian kepala halaman (header) yang seragam berisi judul dan subjudul."""

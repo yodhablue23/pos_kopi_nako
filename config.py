@@ -11,7 +11,7 @@ from pathlib import Path
 # oleh modul pengujian database tanpa harus mewajibkan Kivy aktif terlebih dahulu.
 try:
     from kivy.config import Config
-    Config.set("graphics", "minimum_width", "720")
+    Config.set("graphics", "minimum_width", "360")
     Config.set("graphics", "minimum_height", "600")
     from kivy.core.window import Window
 except ImportError:

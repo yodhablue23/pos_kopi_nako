@@ -38,11 +38,11 @@ from kivy.uix.scrollview import ScrollView
 from kivy.uix.spinner import Spinner
 from kivy.uix.image import Image
 
-from config import BARCODE_PATH, LOGO_PATH, VOUCHER_CODES
+from config import ASSETS_DIR, BARCODE_PATH, LOGO_PATH, VOUCHER_CODES
 from theme import (
     ACCENT, ACCENT_ALT, ACCENT_TEXT, ACCENT_THEMES, BORDER, CORAL, DANGER_TEXT,
     MUTED, NAV_COLORS, ON_ACCENT, RECEIPT_PAPER, RECEIPT_TEXT, SUCCESS_TEXT,
-    SURFACE, TEAL, TEXT, apply_theme,
+    SURFACE, TEAL, TEXT, WHITE, apply_theme,
 )
 from database import (
     Database, MAX_CUSTOMER_LABEL_LENGTH, MAX_PRODUCT_STOCK,
@@ -156,6 +156,7 @@ class POSApp(App):
         )
         self.menu_icon_label = Text("=", size=16, bold=True, color=ACCENT_TEXT, align="center")
         self.menu_icon_box.add_widget(self.menu_icon_label)
+        self.menu_icon_box.bind(on_touch_down=self.toggle_navigation)
         self.top_bar.add_widget(self.menu_icon_box)
 
         self.top_bar_title = Text(
@@ -202,6 +203,21 @@ class POSApp(App):
         )
         self.avatar_badge.add_widget(self.avatar_label)
         self.top_bar.add_widget(self.avatar_badge)
+
+        def adapt_top_bar(_widget, width):
+            narrow = width < dp(680)
+            self.top_bar.padding = [dp(8 if narrow else 18), dp(8), dp(8 if narrow else 18), dp(8)]
+            self.top_bar.spacing = dp(6 if narrow else 10)
+            self.top_bar_title.width = dp(105 if narrow else 240)
+            self.top_bar_title.font_size = dp(13 if narrow else 15)
+            self.theme_btn.width = dp(58 if narrow else 76)
+            self.notif_badge.width = dp(0 if narrow else 36)
+            self.notif_badge.opacity = 0 if narrow else 1
+            self.top_user_label.width = dp(0 if narrow else 135)
+            self.top_user_label.opacity = 0 if narrow else 1
+
+        self.top_bar.bind(width=adapt_top_bar)
+        adapt_top_bar(self.top_bar, self.top_bar.width)
 
         # Sidebar Navigasi Kiri bergaya Brand Header (Logo + Kopi Nako di Kiri Atas)
         self.nav_wrapper = Card(
@@ -286,6 +302,8 @@ class POSApp(App):
         self.logout_button.font_size = dp(11)
         self.nav_wrapper.add_widget(self.logout_button)
         self.root_layout = root
+        self._navigation_hidden_for_width = False
+        root.bind(width=self._adapt_navigation_for_width)
 
         # Di halaman login: sidebar & top_bar tidak ditampilkan agar halaman login bersih
         self.nav_wrapper.opacity = 0
@@ -356,6 +374,40 @@ class POSApp(App):
         self.nav_wrapper.disabled = False
         self.nav_wrapper.width = dp(162)
 
+    def _adapt_navigation_for_width(self, _root, width):
+        if self.user_role() is None:
+            return
+        if width < dp(740):
+            if self.nav_wrapper in self.root_layout.children:
+                self.root_layout.remove_widget(self.nav_wrapper)
+                self._navigation_hidden_for_width = True
+        elif self._navigation_hidden_for_width:
+            if self.nav_wrapper not in self.root_layout.children:
+                self.root_layout.add_widget(
+                    self.nav_wrapper, index=len(self.root_layout.children)
+                )
+                self.nav_wrapper.opacity = 1
+                self.nav_wrapper.disabled = False
+                self.nav_wrapper.width = dp(162)
+            self._navigation_hidden_for_width = False
+
+    def toggle_navigation(self, widget, touch):
+        """Membuka atau menutup sidebar melalui tombol garis di header."""
+        if self.sm.current == "login" or not widget.collide_point(*touch.pos):
+            return False
+
+        if self.nav_wrapper in self.root_layout.children:
+            self.root_layout.remove_widget(self.nav_wrapper)
+        else:
+            self.root_layout.add_widget(
+                self.nav_wrapper, index=len(self.root_layout.children)
+            )
+            self.nav_wrapper.opacity = 1
+            self.nav_wrapper.disabled = False
+            self.nav_wrapper.width = dp(162)
+        self._navigation_hidden_for_width = False
+        return True
+
     def _hide_app_shell(self):
         """Menyembunyikan Sidebar Kiri dan Top Header Bar saat kembali ke halaman login."""
         if hasattr(self, "root_layout") and self.nav_wrapper in self.root_layout.children:
@@ -408,26 +460,79 @@ class POSApp(App):
             "allowed_screens": mod.ALLOWED_SCREENS,
         }
 
-    def login(self, username, password):
-        """Memproses login pengguna dengan verifikasi username dan password."""
+    def open_login_dialog(self, expected_role):
+        """Meminta kredensial setelah pengguna memilih jenis akun."""
+        role_labels = {
+            "admin": "Admin",
+            "kasir": "Kasir",
+            "pelanggan": "Pelanggan",
+        }
+        role_label = role_labels.get(expected_role)
+        if role_label is None:
+            self.notice("Jenis akun tidak dikenal.")
+            return
+
+        content = BoxLayout(
+            orientation="vertical", padding=dp(16), spacing=dp(10),
+            size_hint_y=None, height=dp(180),
+        )
+        username_field = text_input("Username", height=44)
+        password_field = text_input("Password", password=True, height=44)
+        content.add_widget(username_field)
+        content.add_widget(password_field)
+        actions = BoxLayout(
+            orientation="horizontal", spacing=dp(8),
+            size_hint_y=None, height=dp(44),
+        )
+        login_popup = None
+
+        def submit_login(*_):
+            if self.login(
+                username_field.text,
+                password_field.text,
+                expected_role=expected_role,
+            ):
+                login_popup.dismiss()
+
+        actions.add_widget(button(
+            "BATAL", lambda *_: login_popup.dismiss(),
+            False, 44, outline=True,
+        ))
+        actions.add_widget(button("MASUK", submit_login, True, 44))
+        content.add_widget(actions)
+        password_field.bind(on_text_validate=submit_login)
+
+        login_popup = themed_popup(
+            f"Login sebagai {role_label}", content,
+            size_hint=(0.86, None), height=dp(260),
+            auto_dismiss=True,
+        )
+        _style_popup_text_white(login_popup, content)
+        login_popup.open()
+
+    def login(self, username, password, expected_role=None):
+        """Memproses login pengguna dengan verifikasi kredensial dan jenis akun."""
         if self.db_error:
             self.notice(
                 f"Database ({self.db.engine}) belum tersambung:\n{self.db_error}"
             )
-            return
+            return False
         if not username.strip() or not password:
             self.notice("Username dan password wajib diisi.")
-            return
+            return False
 
         try:
             user = self.db.authenticate_user(username, password)
         except Exception as error:
             self.notice("Login gagal karena kendala database:\n" + str(error))
-            return
+            return False
 
         if user is None:
             self.notice("Username atau password salah.")
-            return
+            return False
+        if expected_role is not None and user["role"] != expected_role:
+            self.notice("Akun ini bukan akun " + expected_role + ".")
+            return False
 
         # Login berhasil
         self.current_user = user
@@ -439,10 +544,12 @@ class POSApp(App):
         self._show_app_shell()
         target_screen = "products" if self.user_role() == "pelanggan" else "home"
         self.sm.current = target_screen
+        self._adapt_navigation_for_width(self.root_layout, self.root_layout.width)
         self.refresh_data()
         self.refresh_report()
         self.update_nav()
         self.sm.get_screen(target_screen).render()
+        return True
 
     def login_as_customer(self):
         """Jalan pintas Self-Order Pelanggan tanpa mengetik password."""
@@ -460,10 +567,91 @@ class POSApp(App):
         self.voucher_code = ""
         self._show_app_shell()
         self.sm.current = "products"
+        self._adapt_navigation_for_width(self.root_layout, self.root_layout.width)
         self.refresh_data()
         self.refresh_report()
         self.update_nav()
         self.sm.get_screen("products").render()
+
+    def open_customer_registration(self):
+        """Membuka formulir pendaftaran akun pelanggan."""
+        if self.db_error:
+            self.notice(
+                f"Database ({self.db.engine}) belum tersambung:\n{self.db_error}"
+            )
+            return
+
+        content = BoxLayout(
+            orientation="vertical", padding=dp(16), spacing=dp(8),
+            size_hint_y=None, height=dp(330),
+        )
+        content.add_widget(Text(
+            "Daftar untuk membuat akun pelanggan.",
+            size=12, color=WHITE, align="center",
+            size_hint_y=None, height=dp(28),
+        ))
+        name_field = text_input("Nama lengkap", height=44)
+        username_field = text_input("Username", height=44)
+        password_field = text_input("Password (minimal 6 karakter)", password=True, height=44)
+        confirm_field = text_input("Konfirmasi password", password=True, height=44)
+        content.add_widget(name_field)
+        content.add_widget(username_field)
+        content.add_widget(password_field)
+        content.add_widget(confirm_field)
+
+        actions = BoxLayout(
+            orientation="horizontal", spacing=dp(8),
+            size_hint_y=None, height=dp(44),
+        )
+        register_popup = None
+
+        def submit_registration(*_):
+            name = name_field.text.strip()
+            username = username_field.text.strip()
+            password = password_field.text
+            confirm = confirm_field.text
+            if password != confirm:
+                self.notice("Konfirmasi password tidak sama.")
+                return
+            try:
+                user = self.db.register_customer(username, name, password)
+            except ValueError as error:
+                self.notice(str(error))
+                return
+            except Exception as error:
+                self.notice("Registrasi gagal:\n" + str(error))
+                return
+
+            if register_popup is not None:
+                register_popup.dismiss()
+            self.current_user = user
+            self.cart.clear()
+            self.cart_notes.clear()
+            self.customer_name = ""
+            self.order_type = "Dine-In"
+            self.voucher_code = ""
+            self._show_app_shell()
+            self.sm.current = "products"
+            self._adapt_navigation_for_width(self.root_layout, self.root_layout.width)
+            self.refresh_data()
+            self.refresh_report()
+            self.update_nav()
+            self.sm.get_screen("products").render()
+            self.notice("Registrasi berhasil. Selamat datang!")
+
+        cancel_btn = button("BATAL", lambda *_: register_popup.dismiss(), False, 44, outline=True)
+        register_btn = button("DAFTAR", submit_registration, True, 44)
+        actions.add_widget(cancel_btn)
+        actions.add_widget(register_btn)
+        content.add_widget(actions)
+
+        register_popup = themed_popup(
+            "Daftar Akun Pelanggan", content,
+            size_hint=(0.86, None), height=dp(390),
+            auto_dismiss=False,
+        )
+        _style_popup_text_white(register_popup, content)
+        register_popup.open()
 
     def logout(self):
         """Mengakhiri sesi kasir dan mengembalikan layar ke halaman login."""
@@ -884,6 +1072,10 @@ class POSApp(App):
 
     def set_item_note(self, product_id, note_text):
         """Menyimpan catatan kustomisasi racikan (gula, es, catatan) untuk produk di keranjang."""
+        product = self.products_by_id.get(product_id)
+        if product is not None and product.get("category") == "Makanan":
+            self.cart_notes.pop(product_id, None)
+            raise ValueError("Racikan hanya tersedia untuk kategori minuman.")
         cleaned = " ".join(str(note_text or "").split())[:60]
         if cleaned:
             self.cart_notes[product_id] = cleaned
@@ -894,6 +1086,10 @@ class POSApp(App):
 
     def get_item_note(self, product_id):
         """Mengambil catatan kustomisasi racikan untuk produk di keranjang."""
+        product = self.products_by_id.get(product_id)
+        if product is not None and product.get("category") == "Makanan":
+            self.cart_notes.pop(product_id, None)
+            return ""
         return self.cart_notes.get(product_id, "")
 
     def set_qty(self, pid, raw_quantity):
@@ -1202,10 +1398,26 @@ class POSApp(App):
             ))
         content.add_widget(qr_card)
 
-        content.add_widget(Text(
-            "Mendukung GoPay, OVO, Dana, ShopeePay, LinkAja, & Mobile Banking",
-            size=11, color=MUTED, size_hint_y=None, height=dp(20), align="center"
-        ))
+        ewallet_logos = GridLayout(
+            cols=5, spacing=dp(6), size_hint_y=None, height=dp(48),
+        )
+        for logo_name in (
+            "shopeepay.jpg",
+            "Logo_dana_blue.svg.webp",
+            "Logo_ovo_purple.svg.webp",
+            "linkaja.png",
+            "Gopay_logo_(2019).svg.webp",
+        ):
+            logo_card = Card(
+                orientation="vertical", padding=dp(4),
+                color=WHITE, radius=8,
+            )
+            logo_card.add_widget(Image(
+                source=str(ASSETS_DIR / "ewallet" / logo_name),
+                fit_mode="contain",
+            ))
+            ewallet_logos.add_widget(logo_card)
+        content.add_widget(ewallet_logos)
 
         ewallet_popup = themed_popup(
             "Barcode Pembayaran Saldo (E-Wallet)", content,
@@ -1226,7 +1438,7 @@ class POSApp(App):
         ewallet_popup.open()
 
     def open_debit_card_popup(self, parent_popup, total):
-        """Membuka modal pembayaran dark dengan tab kartu, e-wallet, dan QRIS."""
+        """Membuka modal pembayaran kartu debit digital dan QRIS."""
         parent_popup.dismiss()
 
         content = payment_surface(size_hint=(1, 1))
@@ -1246,7 +1458,7 @@ class POSApp(App):
         selected_tab = {"name": "Card"}
         tab_buttons = {}
         tab_row = GridLayout(
-            cols=3, spacing=dp(8), size_hint_y=None, height=dp(42)
+            cols=2, spacing=dp(8), size_hint_y=None, height=dp(42)
         )
         content.add_widget(tab_row)
 
@@ -1448,7 +1660,7 @@ class POSApp(App):
             selected_tab["name"] = name
             render_tab()
 
-        for name in ("Card", "E-Wallet", "QRIS"):
+        for name in ("Card", "QRIS"):
             tab = payment_tab(
                 name, lambda selected=name: select_tab(selected),
                 active=name == selected_tab["name"],

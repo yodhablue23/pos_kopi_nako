@@ -443,6 +443,55 @@ class Database:
         finally:
             conn.close()
 
+    def register_customer(self, username, full_name, password):
+        """Mendaftarkan akun pelanggan baru dengan role pelanggan."""
+        username = username.strip()
+        full_name = full_name.strip()
+        if not username or not full_name or not password:
+            raise ValueError("Nama, username, dan password wajib diisi.")
+        if len(username) > 50:
+            raise ValueError("Username maksimal 50 karakter.")
+        if len(full_name) > 100:
+            raise ValueError("Nama maksimal 100 karakter.")
+        if len(password) < 6:
+            raise ValueError("Password minimal 6 karakter.")
+
+        conn = self.connect()
+        try:
+            if self.engine == "mysql":
+                cur = conn.cursor(dictionary=True)
+            else:
+                cur = conn.cursor()
+
+            check_sql = self._prepare_sql(
+                "SELECT 1 FROM akun WHERE username = %s LIMIT 1"
+            )
+            cur.execute(check_sql, (username,))
+            if cur.fetchone() is not None:
+                raise ValueError("Username sudah digunakan. Pilih username lain.")
+
+            iterations = 200000
+            salt = secrets.token_hex(16)
+            digest = hashlib.pbkdf2_hmac(
+                "sha256",
+                password.encode("utf-8"),
+                salt.encode("utf-8"),
+                iterations,
+            ).hex()
+            password_hash = f"pbkdf2_sha256${iterations}${salt}${digest}"
+            insert_sql = self._prepare_sql(
+                "INSERT INTO akun (username, nama, role, password_hash) "
+                "VALUES (%s, %s, 'pelanggan', %s)"
+            )
+            cur.execute(insert_sql, (username, full_name, password_hash))
+            conn.commit()
+            cur.close()
+            return self.authenticate_user(username, password)
+        except sqlite3.IntegrityError:
+            raise ValueError("Username sudah digunakan. Pilih username lain.")
+        finally:
+            conn.close()
+
     def get_products(self):
         """Mengambil seluruh daftar produk yang tersimpan di database."""
         conn = self.connect()
