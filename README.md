@@ -45,13 +45,26 @@ Aplikasi kasir desktop kafe **Kopi Nako** yang dibangun menggunakan bahasa pemro
 ## Cara Menjalankan Aplikasi
 
 ### 1. Persiapan Environment
-Pastikan pustaka GUI Kivy telah terpasang:
+Gunakan Python 3.12 64-bit (disarankan; Python terbaru belum tentu memiliki
+paket Kivy siap pasang), lalu buat environment dan pasang dependensi:
+
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
+
+Jika PowerShell menolak aktivasi environment, jalankan perintah Python melalui
+path langsung:
+
 ```bash
-pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe main.py
 ```
 
 ### 2. Menjalankan Program
-Jalankan file `main.py`:
+Setelah environment aktif, jalankan file `main.py`:
 ```bash
 python main.py
 ```

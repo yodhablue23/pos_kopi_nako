@@ -113,6 +113,21 @@ except ImportError:
 class Database:
     """Pengelola koneksi dan operasi database POS Kopi Nako."""
 
+    @staticmethod
+    def _password_matches(password, password_hash):
+        """Memverifikasi password dengan format hash yang digunakan aplikasi."""
+        try:
+            algorithm, iteration_text, salt, expected = password_hash.split("$", 3)
+            if algorithm != "pbkdf2_sha256":
+                return False
+            actual = hashlib.pbkdf2_hmac(
+                "sha256", password.encode("utf-8"),
+                salt.encode("utf-8"), int(iteration_text)
+            ).hex()
+            return hmac.compare_digest(actual, expected)
+        except (ValueError, TypeError, AttributeError):
+            return False
+
     def __init__(self):
         # Tentukan engine database yang aktif
         if DB_ENGINE == "mysql" and MYSQL_AVAILABLE:
@@ -420,25 +435,13 @@ class Database:
             if not row:
                 return None
 
-            try:
-                algorithm, iteration_text, salt, expected = row["password_hash"].split("$", 3)
-                if algorithm != "pbkdf2_sha256":
-                    return None
-                iterations = int(iteration_text)
-                actual = hashlib.pbkdf2_hmac(
-                    "sha256", password.encode("utf-8"),
-                    salt.encode("utf-8"), iterations
-                ).hex()
-
-                if hmac.compare_digest(actual, expected):
-                    return {
-                        "id": int(row["id"]),
-                        "username": row["username"],
-                        "nama": row["nama"],
-                        "role": row["role"],
-                    }
-            except (ValueError, TypeError, AttributeError):
-                return None
+            if self._password_matches(password, row["password_hash"]):
+                return {
+                    "id": int(row["id"]),
+                    "username": row["username"],
+                    "nama": row["nama"],
+                    "role": row["role"],
+                }
             return None
         finally:
             conn.close()
@@ -489,6 +492,69 @@ class Database:
             return self.authenticate_user(username, password)
         except sqlite3.IntegrityError:
             raise ValueError("Username sudah digunakan. Pilih username lain.")
+        finally:
+            conn.close()
+
+    def reset_customer_password(
+        self, username, full_name, old_password, new_password
+    ):
+        """Mengganti password pelanggan setelah memverifikasi password saat ini."""
+        username = username.strip()
+        full_name = full_name.strip()
+        if not username or not full_name or not old_password or not new_password:
+            raise ValueError(
+                "Username, nama akun, password lama, dan password baru wajib diisi."
+            )
+        if len(username) > 50:
+            raise ValueError("Username maksimal 50 karakter.")
+        if len(full_name) > 100:
+            raise ValueError("Nama maksimal 100 karakter.")
+        if len(new_password) < 6:
+            raise ValueError("Password minimal 6 karakter.")
+
+        iterations = 200000
+        salt = secrets.token_hex(16)
+        digest = hashlib.pbkdf2_hmac(
+            "sha256", new_password.encode("utf-8"),
+            salt.encode("utf-8"), iterations
+        ).hex()
+        password_hash = f"pbkdf2_sha256${iterations}${salt}${digest}"
+
+        conn = self.connect()
+        try:
+            if self.engine == "mysql":
+                cur = conn.cursor(dictionary=True)
+                lock_clause = " FOR UPDATE"
+            else:
+                cur = conn.cursor()
+                conn.execute("BEGIN IMMEDIATE")
+                lock_clause = ""
+            select_sql = self._prepare_sql(
+                "SELECT id, password_hash FROM akun "
+                "WHERE username = %s AND nama = %s AND role = 'pelanggan' "
+                "LIMIT 1" + lock_clause
+            )
+            cur.execute(select_sql, (username, full_name))
+            row = cur.fetchone()
+            if not row or not self._password_matches(
+                old_password, row["password_hash"]
+            ):
+                conn.rollback()
+                cur.close()
+                return False
+
+            update_sql = self._prepare_sql(
+                "UPDATE akun SET password_hash = %s "
+                "WHERE id = %s AND role = 'pelanggan'"
+            )
+            cur.execute(update_sql, (password_hash, row["id"]))
+            changed = cur.rowcount == 1
+            conn.commit()
+            cur.close()
+            return changed
+        except Exception:
+            conn.rollback()
+            raise
         finally:
             conn.close()
 

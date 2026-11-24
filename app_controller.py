@@ -42,7 +42,7 @@ from config import ASSETS_DIR, BARCODE_PATH, LOGO_PATH, VOUCHER_CODES
 from theme import (
     ACCENT, ACCENT_ALT, ACCENT_TEXT, ACCENT_THEMES, BORDER, CORAL, DANGER_TEXT,
     MUTED, NAV_COLORS, ON_ACCENT, RECEIPT_PAPER, RECEIPT_TEXT, SUCCESS_TEXT,
-    SURFACE, TEAL, TEXT, WHITE, apply_theme,
+    SURFACE, SURFACE_ALT, TEAL, TEXT, WHITE, apply_theme,
 )
 from database import (
     Database, MAX_CUSTOMER_LABEL_LENGTH, MAX_PRODUCT_STOCK,
@@ -474,12 +474,18 @@ class POSApp(App):
 
         content = BoxLayout(
             orientation="vertical", padding=dp(16), spacing=dp(10),
-            size_hint_y=None, height=dp(180),
+            size_hint_y=None, height=dp(230 if expected_role == "pelanggan" else 180),
         )
         username_field = text_input("Username", height=44)
         password_field = text_input("Password", password=True, height=44)
         content.add_widget(username_field)
         content.add_widget(password_field)
+        if expected_role == "pelanggan":
+            content.add_widget(button(
+                "LUPA PASSWORD?",
+                lambda *_: self.open_customer_password_reset(),
+                False, 32, fill_color=(0, 0, 0, 0), text_color=ACCENT_TEXT,
+            ))
         actions = BoxLayout(
             orientation="horizontal", spacing=dp(8),
             size_hint_y=None, height=dp(44),
@@ -504,11 +510,110 @@ class POSApp(App):
 
         login_popup = themed_popup(
             f"Login sebagai {role_label}", content,
-            size_hint=(0.86, None), height=dp(260),
+            size_hint=(0.86, None),
+            height=dp(310 if expected_role == "pelanggan" else 260),
             auto_dismiss=True,
         )
         _style_popup_text_white(login_popup, content)
         login_popup.open()
+
+    def open_customer_password_reset(self):
+        """Membuka formulir pemulihan password khusus akun pelanggan."""
+        if self.db_error:
+            self.notice(
+                f"Database ({self.db.engine}) belum tersambung:\n{self.db_error}"
+            )
+            return
+
+        content = BoxLayout(
+            orientation="vertical", padding=[dp(18), dp(12)], spacing=dp(6),
+            size_hint_y=None, height=dp(432),
+        )
+        security_note = Card(
+            orientation="vertical", padding=[dp(12), dp(8)], spacing=dp(2),
+            color=SURFACE_ALT, radius=12, border_color=BORDER,
+            size_hint_y=None, height=dp(60),
+        )
+        security_note.add_widget(Text(
+            "VERIFIKASI KEAMANAN", size=10, bold=True, color=ACCENT_TEXT,
+            size_hint_y=None, height=dp(16),
+        ))
+        security_note.add_widget(Text(
+            "Password lama diperlukan untuk memastikan akun milik Anda.",
+            size=11, color=MUTED,
+        ))
+        content.add_widget(security_note)
+
+        content.add_widget(Text(
+            "IDENTITAS AKUN", size=10, bold=True, color=MUTED,
+            size_hint_y=None, height=dp(16),
+        ))
+        username_field = text_input("Username", height=44)
+        name_field = text_input("Nama sesuai akun", height=44)
+        content.add_widget(username_field)
+        content.add_widget(name_field)
+
+        content.add_widget(Text(
+            "KREDENSIAL", size=10, bold=True, color=MUTED,
+            size_hint_y=None, height=dp(16),
+        ))
+        old_password_field = text_input(
+            "Password lama", password=True, height=44
+        )
+        password_field = text_input(
+            "Password baru (minimal 6 karakter)", password=True, height=44
+        )
+        confirm_field = text_input(
+            "Konfirmasi password baru", password=True, height=44
+        )
+        for field in (
+            old_password_field, password_field, confirm_field,
+        ):
+            content.add_widget(field)
+
+        actions = BoxLayout(
+            orientation="horizontal", spacing=dp(8),
+            size_hint_y=None, height=dp(44),
+        )
+        reset_popup = None
+
+        def submit_reset(*_):
+            if password_field.text != confirm_field.text:
+                self.notice("Konfirmasi password tidak sama.")
+                return
+            try:
+                updated = self.db.reset_customer_password(
+                    username_field.text, name_field.text, old_password_field.text,
+                    password_field.text,
+                )
+            except ValueError as error:
+                self.notice(str(error))
+                return
+            except Exception as error:
+                self.notice("Pemulihan password gagal:\n" + str(error))
+                return
+
+            if not updated:
+                self.notice(
+                    "Data akun atau password lama tidak cocok dengan akun pelanggan."
+                )
+                return
+            reset_popup.dismiss()
+            self.notice("Password berhasil diperbarui. Silakan login kembali.")
+
+        actions.add_widget(button(
+            "BATAL", lambda *_: reset_popup.dismiss(),
+            False, 44, outline=True,
+        ))
+        actions.add_widget(button("SIMPAN PASSWORD", submit_reset, True, 44))
+        content.add_widget(actions)
+
+        reset_popup = themed_popup(
+            "Atur Ulang Password", content,
+            size_hint=(0.9, None), height=dp(500),
+            auto_dismiss=False,
+        )
+        reset_popup.open()
 
     def login(self, username, password, expected_role=None):
         """Memproses login pengguna dengan verifikasi kredensial dan jenis akun."""

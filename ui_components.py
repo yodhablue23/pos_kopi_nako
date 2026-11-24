@@ -196,7 +196,9 @@ def payment_surface(**kwargs):
     kwargs.setdefault("padding", [dp(20), dp(18), dp(20), dp(18)])
     kwargs.setdefault("spacing", dp(12))
     kwargs.setdefault("color", PAYMENT_BG)
-    kwargs.setdefault("radius", 18)
+    kwargs.setdefault("radius", 20)
+    kwargs.setdefault("border_color", ACCENT)
+    kwargs.setdefault("border_width", 1.1)
     return Card(**kwargs)
 
 
@@ -439,7 +441,7 @@ def status_chip(label, color, width=120, height=30):
 
 
 def themed_popup(title, content, **kwargs):
-    """Membuat popup dengan permukaan, teks, dan aksen tema aktif."""
+    """Membuat popup berbingkai rounded dengan aksen tema aktif."""
     popup_options = {
         "background": "atlas://data/images/defaulttheme/modalview-background",
         "background_color": SURFACE,
@@ -449,7 +451,35 @@ def themed_popup(title, content, **kwargs):
         "title_size": dp(17),
     }
     popup_options.update(kwargs)
-    return Popup(title=title, content=content, **popup_options)
+    surface_color = tuple(popup_options["background_color"])
+    popup_options["background_color"] = (0, 0, 0, 0)
+    popup = Popup(title=title, content=content, **popup_options)
+
+    if surface_color[3] > 0:
+        panel = popup.children[0]
+        with panel.canvas.before:
+            Color(*surface_color)
+            panel._surface_shape = RoundedRectangle(
+                pos=panel.pos, size=panel.size, radius=[dp(20)]
+            )
+            Color(*ACCENT)
+            panel._surface_border = Line(
+                rounded_rectangle=(
+                    panel.x, panel.y, panel.width, panel.height, dp(20)
+                ),
+                width=1.1,
+            )
+
+        def update_surface(*_):
+            panel._surface_shape.pos = panel.pos
+            panel._surface_shape.size = panel.size
+            panel._surface_border.rounded_rectangle = (
+                panel.x, panel.y, panel.width, panel.height, dp(20)
+            )
+
+        panel.bind(pos=update_surface, size=update_surface)
+
+    return popup
 
 
 class Page(Screen):
