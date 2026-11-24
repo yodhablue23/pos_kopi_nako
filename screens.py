@@ -1200,60 +1200,134 @@ class ProductsPage(Page):
 
         products_by_name = {product["name"]: product for product in app.products}
         product_names = tuple(products_by_name.keys())
-        content = BoxLayout(
-            orientation="vertical", padding=dp(18), spacing=dp(9)
+        content = Card(
+            orientation="vertical", padding=[dp(20), dp(14)], spacing=dp(8),
+            color=SURFACE, radius=20, border_color=ACCENT,
         )
-        content.add_widget(Text(
-            "Gunakan panel ini untuk mencatat stok pembelian yang baru datang.",
-            size=12, color=MUTED, align="center",
-            size_hint_y=None, height=dp(32)
+
+        header = BoxLayout(
+            orientation="horizontal", size_hint_y=None,
+            height=dp(50), spacing=dp(12),
+        )
+        stock_icon = Card(
+            orientation="vertical", size_hint=(None, None),
+            size=(dp(46), dp(42)), color=ACCENT, radius=13,
+        )
+        stock_icon.add_widget(Text(
+            "ST", size=14, bold=True, color=ON_ACCENT, align="center",
         ))
+        header.add_widget(stock_icon)
+
+        heading = BoxLayout(orientation="vertical", spacing=dp(1))
+        heading.add_widget(Text(
+            "Kontrol Persediaan", size=17, bold=True, color=TEXT,
+            size_hint_y=None, height=dp(24),
+        ))
+        heading.add_widget(Text(
+            "Catat stok masuk dan pantau kapasitas produk.",
+            size=10, color=MUTED,
+        ))
+        header.add_widget(heading)
+
+        stock_tag = Card(
+            orientation="vertical", size_hint=(None, None),
+            size=(dp(58), dp(24)), color=SURFACE_ALT, radius=8,
+        )
+        stock_tag.add_widget(Text(
+            "KASIR", size=8, bold=True, color=ACCENT_TEXT, align="center",
+        ))
+        header.add_widget(stock_tag)
+        content.add_widget(header)
+        content.add_widget(Card(
+            color=ACCENT, radius=1, size_hint_y=None, height=dp(2),
+        ))
+
         content.add_widget(Text(
-            "Pilih Produk", size=11, bold=True, color=COFFEE,
-            size_hint_y=None, height=dp(2)
+            "PILIH PRODUK", size=10, bold=True, color=MUTED,
+            size_hint_y=None, height=dp(14),
         ))
 
         product_spinner = Spinner(
             text=product_names[0], values=product_names,
             size_hint_y=None, height=dp(44),
-            font_size=dp(13), bold=True, color=ON_ACCENT,
+            font_size=dp(13), bold=True, color=TEXT,
             background_normal="", background_down="",
-            background_color=ACCENT,
+            background_color=(0, 0, 0, 0),
         )
-        content.add_widget(product_spinner)
+        product_selector = Card(
+            orientation="horizontal", padding=[dp(12), 0],
+            color=INPUT, radius=12, border_color=BORDER,
+            size_hint_y=None, height=dp(48),
+        )
+        product_selector.add_widget(product_spinner)
+        content.add_widget(product_selector)
 
         current_stock_label = Text(
-            "", size=12, bold=True, color=ACCENT_TEXT,
-            size_hint_y=None, height=dp(22), align="center"
+            "", size=14, bold=True, color=TEXT,
+            size_hint_y=None, height=dp(20),
         )
-        content.add_widget(current_stock_label)
-
-        content.add_widget(Text(
-            f"Jumlah Stok Masuk (batas total {MAX_PRODUCT_STOCK})",
-            size=11, bold=True, color=COFFEE,
-            size_hint_y=None, height=dp(18)
+        remaining_stock_label = Text(
+            "", size=9, bold=True, color=ACCENT_TEXT, align="right",
+            size_hint=(None, 1), width=dp(150),
+        )
+        stock_summary = Card(
+            orientation="horizontal", padding=[dp(14), dp(7)],
+            spacing=dp(8), color=SURFACE_ALT, radius=12,
+            border_color=BORDER, size_hint_y=None, height=dp(52),
+        )
+        stock_details = BoxLayout(orientation="vertical", spacing=dp(1))
+        stock_details.add_widget(Text(
+            "STOK SAAT INI", size=8, bold=True, color=MUTED,
+            size_hint_y=None, height=dp(14),
         ))
+        stock_details.add_widget(current_stock_label)
+        stock_summary.add_widget(stock_details)
+        stock_summary.add_widget(remaining_stock_label)
+        content.add_widget(stock_summary)
+
+        quantity_header = BoxLayout(
+            orientation="horizontal", size_hint_y=None, height=dp(16),
+        )
+        quantity_header.add_widget(Text(
+            "JUMLAH STOK MASUK", size=10, bold=True, color=MUTED,
+        ))
+        quantity_header.add_widget(Text(
+            f"BATAS {MAX_PRODUCT_STOCK} ITEM", size=8, bold=True,
+            color=MUTED, align="right",
+        ))
+        content.add_widget(quantity_header)
         stock_input = text_input(
             hint_text="Contoh: 20",
             height=46,
-            font_size=15,
+            font_size=15, foreground_color=TEXT,
+            hint_text_color=MUTED, background_color=(0, 0, 0, 0),
             input_filter="int",
-            halign="center",
+            halign="left",
         )
-        content.add_widget(stock_input)
+        stock_input_shell = Card(
+            orientation="horizontal", padding=[dp(14), 0, dp(12), 0],
+            spacing=dp(8), color=INPUT, radius=12, border_color=BORDER,
+            size_hint_y=None, height=dp(50),
+        )
+        stock_input_shell.add_widget(stock_input)
+        stock_input_shell.add_widget(Text(
+            "ITEM", size=9, bold=True, color=ACCENT_TEXT,
+            size_hint=(None, 1), width=dp(38), align="center",
+        ))
+        content.add_widget(stock_input_shell)
 
         feedback_label = Text(
-            "", size=11, color=DANGER_TEXT, align="center",
-            size_hint_y=None, height=dp(30)
+            "", size=10, color=DANGER_TEXT, align="left",
+            size_hint_y=None, height=dp(18),
         )
         content.add_widget(feedback_label)
 
         popup = themed_popup(
-            "Manajemen Stok Kasir", content,
-            size_hint=(0.88, None), height=dp(350),
+            "", content, size_hint=(0.88, None), height=dp(430),
+            background_color=(0, 0, 0, 0),
+            separator_height=0, title_size=0,
             auto_dismiss=False,
         )
-        _style_popup_text_white(popup, content)
 
         def selected_product():
             return products_by_name.get(product_spinner.text)
@@ -1262,39 +1336,37 @@ class ProductsPage(Page):
             product = selected_product()
             if product is None:
                 current_stock_label.text = "Produk tidak ditemukan"
-                current_stock_label.color = WHITE
+                current_stock_label.color = DANGER_TEXT
+                remaining_stock_label.text = ""
                 return
             current_stock = int(product["stok"])
             remaining = max(0, MAX_PRODUCT_STOCK - current_stock)
-            current_stock_label.text = (
-                f"Stok: {current_stock}/{MAX_PRODUCT_STOCK} item "
-                f"• kapasitas tersisa: {remaining}"
-            )
-            current_stock_label.color = WHITE
+            current_stock_label.text = f"{current_stock} / {MAX_PRODUCT_STOCK} item"
+            remaining_stock_label.text = f"SISA {remaining} ITEM"
             stock_input.hint_text = f"Maksimal tambah {remaining} item"
             stock_input.disabled = remaining <= 0
             feedback_label.text = (
                 "Stok sudah mencapai batas maksimal."
                 if remaining <= 0 else ""
             )
-            feedback_label.color = WHITE
+            feedback_label.color = WARNING_TEXT
             add_stock_button.disabled = remaining <= 0
 
         def submit_stock():
             product = selected_product()
             if product is None:
                 feedback_label.text = "Pilih produk yang valid."
-                feedback_label.color = WHITE
+                feedback_label.color = DANGER_TEXT
                 return
             try:
                 updated = app.add_stock(product["id"], stock_input.text)
             except (ValueError, TypeError) as error:
                 feedback_label.text = str(error)
-                feedback_label.color = WHITE
+                feedback_label.color = DANGER_TEXT
                 return
             except Exception as error:
                 feedback_label.text = f"Stok gagal diperbarui: {error}"
-                feedback_label.color = WHITE
+                feedback_label.color = DANGER_TEXT
                 return
 
             popup.dismiss()
@@ -1307,7 +1379,10 @@ class ProductsPage(Page):
         product_spinner.bind(text=update_current_stock)
         stock_input.bind(on_text_validate=lambda *_: submit_stock())
         actions = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(8))
-        actions.add_widget(button("BATAL", popup.dismiss, False, 44))
+        actions.add_widget(button(
+            "BATAL", popup.dismiss, False, 44,
+            outline=True, outline_color=BORDER_STRONG,
+        ))
         add_stock_button = button("TAMBAH STOK", submit_stock, True, 44)
         actions.add_widget(add_stock_button)
         content.add_widget(actions)
